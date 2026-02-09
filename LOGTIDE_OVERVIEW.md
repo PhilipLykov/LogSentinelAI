@@ -22,7 +22,7 @@ LogTide is an **open-source, privacy-first log management platform** designed as
 
 | Option | Description |
 |--------|-------------|
-| **Self-hosted Docker** | Pre-built images (Docker Hub / GHCR). `docker compose up -d`. Frontend :3000, API :8080. |
+| **Self-hosted Docker** | Pre-built images (Docker Hub / GHCR). `docker compose up -d`. Frontend :3000, API :8070. |
 | **Simplified (no Redis)** | `docker-compose.simple.yml` — fewer containers, PostgreSQL-only for queue/cache. Good for &lt;1000 logs/sec, Raspberry Pi, homelab. |
 | **With Fluent Bit (syslog)** | `--profile logging` adds Fluent Bit; exposes **UDP/TCP 514** for syslog (RFC 3164/5424). |
 | **Kubernetes (Helm)** | Official Helm chart: multi-replica backend/worker, HPA, Ingress, Prometheus. |

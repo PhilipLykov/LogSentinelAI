@@ -82,7 +82,7 @@ docker compose up -d
 
 Services:
 - **backend** on port `3000` (API + pipeline)
-- **dashboard** on port `8080` (React UI)
+- **dashboard** on port `8070` (React UI)
 - **db** PostgreSQL 16
 
 ## API endpoints
