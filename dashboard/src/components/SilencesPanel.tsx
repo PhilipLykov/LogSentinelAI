@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   type Silence,
   type MonitoredSystem,
@@ -265,6 +265,7 @@ function SilenceFormModal({
   onSave: (data: SilenceFormData) => void;
   onCancel: () => void;
 }) {
+  const mouseDownOnOverlay = useRef(false);
   const [name, setName] = useState('');
   const [comment, setComment] = useState('');
   const [scopeType, setScopeType] = useState<'global' | 'systems' | 'rules'>('global');
@@ -317,7 +318,14 @@ function SilenceFormModal({
     (scopeType === 'rules' && selectedRules.length > 0);
 
   return (
-    <div className="modal-overlay" onClick={onCancel} role="dialog" aria-modal="true" aria-label="Create Silence">
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && mouseDownOnOverlay.current) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create Silence"
+    >
       <div className="modal-content modal-wide" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">Create Silence</h3>
         <form onSubmit={handleSubmit}>

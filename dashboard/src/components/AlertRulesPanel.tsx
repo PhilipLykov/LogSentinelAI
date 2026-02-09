@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   type NotificationChannel,
   type NotificationRule,
@@ -361,6 +361,8 @@ function RuleFormModal({
   onSave: (data: RuleFormData, existingId?: string) => void;
   onCancel: () => void;
 }) {
+  const mouseDownOnOverlay = useRef(false);
+
   // Parse existing rule data
   const tc = rule?.trigger_config as { min_score?: number; criterion_id?: number } | undefined;
   const filters = rule?.filters as { system_ids?: string[] } | null | undefined;
@@ -401,7 +403,14 @@ function RuleFormModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onCancel} role="dialog" aria-modal="true" aria-label={mode === 'create' ? 'Create Alert Rule' : 'Edit Alert Rule'}>
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && mouseDownOnOverlay.current) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={mode === 'create' ? 'Create Alert Rule' : 'Edit Alert Rule'}
+    >
       <div className="modal-content modal-wide" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">{mode === 'create' ? 'Create Alert Rule' : 'Edit Alert Rule'}</h3>
         <form onSubmit={handleSubmit}>

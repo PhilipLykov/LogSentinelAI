@@ -29,6 +29,7 @@ export function SystemForm({
   );
   const [nameError, setNameError] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
+  const mouseDownOnOverlay = useRef(false);
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -65,7 +66,14 @@ export function SystemForm({
   };
 
   return (
-    <div className="modal-overlay" onClick={onCancel} role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && mouseDownOnOverlay.current) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">{title}</h3>
         <form onSubmit={handleSubmit}>

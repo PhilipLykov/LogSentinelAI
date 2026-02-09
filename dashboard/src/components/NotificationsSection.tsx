@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   type NotificationChannel,
   type ChannelType,
@@ -450,6 +450,7 @@ function ChannelFormModal({
   onSave: (type: ChannelType, name: string, config: Record<string, unknown>, existingId?: string) => void;
   onCancel: () => void;
 }) {
+  const mouseDownOnOverlay = useRef(false);
   const [type, setType] = useState<ChannelType>(channel?.type ?? 'ntfy');
   const [name, setName] = useState(channel?.name ?? '');
   const [configValues, setConfigValues] = useState<Record<string, string>>(() => {
@@ -486,7 +487,14 @@ function ChannelFormModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onCancel} role="dialog" aria-modal="true" aria-label={mode === 'create' ? 'Add Notification Channel' : 'Edit Channel'}>
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && mouseDownOnOverlay.current) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={mode === 'create' ? 'Add Notification Channel' : 'Edit Channel'}
+    >
       <div className="modal-content modal-wide" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">{mode === 'create' ? 'Add Notification Channel' : 'Edit Channel'}</h3>
         <form onSubmit={handleSubmit}>

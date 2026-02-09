@@ -20,6 +20,7 @@ export function ConfirmDialog({
   saving,
 }: ConfirmDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const mouseDownOnOverlay = useRef(false);
 
   useEffect(() => {
     cancelRef.current?.focus();
@@ -35,7 +36,14 @@ export function ConfirmDialog({
   }, [onCancel]);
 
   return (
-    <div className="modal-overlay" onClick={onCancel} role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && mouseDownOnOverlay.current) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className="modal-content modal-narrow" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">{title}</h3>
         <p className="confirm-message">{message}</p>

@@ -51,6 +51,7 @@ export function SourceForm({
   const [priority, setPriority] = useState(String(initialPriority));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const labelRef = useRef<HTMLInputElement>(null);
+  const mouseDownOnOverlay = useRef(false);
 
   useEffect(() => {
     labelRef.current?.focus();
@@ -115,7 +116,14 @@ export function SourceForm({
   };
 
   return (
-    <div className="modal-overlay" onClick={onCancel} role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && mouseDownOnOverlay.current) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className="modal-content modal-wide" onClick={(e) => e.stopPropagation()}>
         <h3 className="modal-title">{title}</h3>
         <form onSubmit={handleSubmit}>
