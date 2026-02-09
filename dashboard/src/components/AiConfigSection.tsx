@@ -31,8 +31,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [promptsData, setPromptsData] = useState<AiPromptsResponse | null>(null);
   const [scoringPrompt, setScoringPrompt] = useState('');
   const [metaPrompt, setMetaPrompt] = useState('');
+  const [ragPrompt, setRagPrompt] = useState('');
   const [showScoringPrompt, setShowScoringPrompt] = useState(false);
   const [showMetaPrompt, setShowMetaPrompt] = useState(false);
+  const [showRagPrompt, setShowRagPrompt] = useState(false);
   const [savingPrompts, setSavingPrompts] = useState(false);
   const [promptSuccess, setPromptSuccess] = useState('');
   const [promptError, setPromptError] = useState('');
@@ -63,6 +65,7 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       setPromptsData(prompts);
       setScoringPrompt(prompts.scoring_system_prompt ?? prompts.default_scoring_system_prompt);
       setMetaPrompt(prompts.meta_system_prompt ?? prompts.default_meta_system_prompt);
+      setRagPrompt(prompts.rag_system_prompt ?? prompts.default_rag_system_prompt);
       setAckConfig(ack);
       setAckMode(ack.mode);
       setAckPrompt(ack.prompt);
@@ -450,6 +453,89 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
               <span className="form-hint">
                 This prompt is sent as the <code>system</code> message during meta-analysis (window-level).
                 The user message includes the system specification, previous context, open findings, and current window events.
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* RAG / Ask Question Prompt */}
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowRagPrompt((v) => !v)}
+          >
+            <span className={`prompt-chevron${showRagPrompt ? ' open' : ''}`}>&#9654;</span>
+            Ask Question (RAG) System Prompt
+            {promptsData?.rag_is_custom && <span className="prompt-custom-badge">custom</span>}
+          </button>
+
+          {showRagPrompt && (
+            <div className="prompt-editor">
+              <textarea
+                className="prompt-textarea"
+                value={ragPrompt}
+                onChange={(e) => setRagPrompt(e.target.value)}
+                rows={6}
+                spellCheck={false}
+              />
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingPrompts}
+                  onClick={async () => {
+                    setSavingPrompts(true);
+                    setPromptError('');
+                    setPromptSuccess('');
+                    try {
+                      const isDefault = ragPrompt.trim() === promptsData?.default_rag_system_prompt.trim();
+                      const updated = await updateAiPrompts({
+                        rag_system_prompt: isDefault ? null : ragPrompt,
+                      });
+                      setPromptsData(updated);
+                      setRagPrompt(updated.rag_system_prompt ?? updated.default_rag_system_prompt);
+                      setPromptSuccess('RAG prompt saved. Takes effect immediately for new questions.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPromptError(msg);
+                    } finally {
+                      setSavingPrompts(false);
+                    }
+                  }}
+                >
+                  {savingPrompts ? 'Saving…' : 'Save RAG Prompt'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingPrompts}
+                  onClick={async () => {
+                    if (!window.confirm('Reset the RAG prompt to the built-in default?')) return;
+                    setSavingPrompts(true);
+                    setPromptError('');
+                    setPromptSuccess('');
+                    try {
+                      const updated = await updateAiPrompts({ rag_system_prompt: null });
+                      setPromptsData(updated);
+                      setRagPrompt(updated.default_rag_system_prompt);
+                      setPromptSuccess('RAG prompt reset to default.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPromptError(msg);
+                    } finally {
+                      setSavingPrompts(false);
+                    }
+                  }}
+                >
+                  Reset to Default
+                </button>
+              </div>
+              <span className="form-hint">
+                This prompt is sent as the <code>system</code> message when a user asks a natural-language question
+                via the Ask Question feature. The user message includes context from recent meta-analysis results.
               </span>
             </div>
           )}

@@ -264,10 +264,13 @@ export async function updateAiConfig(data: {
 export interface AiPromptsResponse {
   scoring_system_prompt: string | null;
   meta_system_prompt: string | null;
+  rag_system_prompt: string | null;
   scoring_is_custom: boolean;
   meta_is_custom: boolean;
+  rag_is_custom: boolean;
   default_scoring_system_prompt: string;
   default_meta_system_prompt: string;
+  default_rag_system_prompt: string;
 }
 
 export async function fetchAiPrompts(): Promise<AiPromptsResponse> {
@@ -277,6 +280,7 @@ export async function fetchAiPrompts(): Promise<AiPromptsResponse> {
 export async function updateAiPrompts(data: {
   scoring_system_prompt?: string | null;
   meta_system_prompt?: string | null;
+  rag_system_prompt?: string | null;
 }): Promise<AiPromptsResponse> {
   return apiFetch('/api/v1/ai-prompts', {
     method: 'PUT',

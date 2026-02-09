@@ -66,6 +66,8 @@ export interface CustomPrompts {
   scoringSystemPrompt?: string;
   /** Custom meta-analysis system prompt. undefined = use built-in default. */
   metaSystemPrompt?: string;
+  /** Custom RAG (Ask Question) system prompt. undefined = use built-in default. */
+  ragSystemPrompt?: string;
 }
 
 let _promptCache: CustomPrompts | null = null;
@@ -80,7 +82,7 @@ export async function resolveCustomPrompts(db: Knex): Promise<CustomPrompts> {
   if (_promptCache && now - _promptCacheTs < CACHE_TTL_MS) return _promptCache;
 
   const rows = await db('app_config')
-    .whereIn('key', ['scoring_system_prompt', 'meta_system_prompt'])
+    .whereIn('key', ['scoring_system_prompt', 'meta_system_prompt', 'rag_system_prompt'])
     .select('key', 'value');
 
   const result: CustomPrompts = {};
@@ -92,6 +94,7 @@ export async function resolveCustomPrompts(db: Knex): Promise<CustomPrompts> {
     if (typeof val === 'string' && val.trim() !== '') {
       if (row.key === 'scoring_system_prompt') result.scoringSystemPrompt = val;
       if (row.key === 'meta_system_prompt') result.metaSystemPrompt = val;
+      if (row.key === 'rag_system_prompt') result.ragSystemPrompt = val;
     }
   }
 

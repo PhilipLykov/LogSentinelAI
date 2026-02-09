@@ -5,7 +5,7 @@ import { localTimestamp } from '../../config/index.js';
 import { generateComplianceExport, type ExportParams } from './exportCompliance.js';
 import { askQuestion } from './rag.js';
 import { resolveAiConfig, resolveCustomPrompts, invalidateAiConfigCache } from '../llm/aiConfig.js';
-import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT } from '../llm/adapter.js';
+import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
 
 /**
  * Phase 7 feature routes: compliance export, RAG query, app config,
@@ -244,16 +244,19 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       return reply.send({
         scoring_system_prompt: custom.scoringSystemPrompt ?? null,
         meta_system_prompt: custom.metaSystemPrompt ?? null,
+        rag_system_prompt: custom.ragSystemPrompt ?? null,
         scoring_is_custom: !!custom.scoringSystemPrompt,
         meta_is_custom: !!custom.metaSystemPrompt,
+        rag_is_custom: !!custom.ragSystemPrompt,
         default_scoring_system_prompt: DEFAULT_SCORE_SYSTEM_PROMPT,
         default_meta_system_prompt: DEFAULT_META_SYSTEM_PROMPT,
+        default_rag_system_prompt: DEFAULT_RAG_SYSTEM_PROMPT,
       });
     },
   );
 
   /**
-   * PUT /api/v1/ai-prompts — update one or both system prompts.
+   * PUT /api/v1/ai-prompts — update system prompts.
    * Send null or empty string to reset a prompt back to the built-in default.
    */
   app.put(
@@ -261,54 +264,43 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     { preHandler: requireAuth('admin') },
     async (request, reply) => {
       const body = request.body as any ?? {};
-      const { scoring_system_prompt, meta_system_prompt } = body;
+      const { scoring_system_prompt, meta_system_prompt, rag_system_prompt } = body;
 
-      if (scoring_system_prompt === undefined && meta_system_prompt === undefined) {
-        return reply.code(400).send({ error: 'Provide at least one of: scoring_system_prompt, meta_system_prompt.' });
+      if (scoring_system_prompt === undefined && meta_system_prompt === undefined && rag_system_prompt === undefined) {
+        return reply.code(400).send({ error: 'Provide at least one of: scoring_system_prompt, meta_system_prompt, rag_system_prompt.' });
       }
 
       // Validate — prompts must be strings, max 10 000 chars each
       const MAX_PROMPT_LEN = 10_000;
 
-      if (scoring_system_prompt !== undefined && scoring_system_prompt !== null && scoring_system_prompt !== '') {
-        if (typeof scoring_system_prompt !== 'string') {
-          return reply.code(400).send({ error: 'scoring_system_prompt must be a string.' });
-        }
-        if (scoring_system_prompt.length > MAX_PROMPT_LEN) {
-          return reply.code(400).send({ error: `scoring_system_prompt exceeds maximum length (${MAX_PROMPT_LEN} chars).` });
+      const promptFields = [
+        { key: 'scoring_system_prompt', val: scoring_system_prompt },
+        { key: 'meta_system_prompt', val: meta_system_prompt },
+        { key: 'rag_system_prompt', val: rag_system_prompt },
+      ];
+
+      for (const { key, val } of promptFields) {
+        if (val !== undefined && val !== null && val !== '') {
+          if (typeof val !== 'string') {
+            return reply.code(400).send({ error: `${key} must be a string.` });
+          }
+          if (val.length > MAX_PROMPT_LEN) {
+            return reply.code(400).send({ error: `${key} exceeds maximum length (${MAX_PROMPT_LEN} chars).` });
+          }
         }
       }
 
-      if (meta_system_prompt !== undefined && meta_system_prompt !== null && meta_system_prompt !== '') {
-        if (typeof meta_system_prompt !== 'string') {
-          return reply.code(400).send({ error: 'meta_system_prompt must be a string.' });
-        }
-        if (meta_system_prompt.length > MAX_PROMPT_LEN) {
-          return reply.code(400).send({ error: `meta_system_prompt exceeds maximum length (${MAX_PROMPT_LEN} chars).` });
-        }
-      }
-
-      // Upsert or delete
-      if (scoring_system_prompt !== undefined) {
-        if (!scoring_system_prompt || scoring_system_prompt.trim() === '') {
+      // Upsert or delete each prompt
+      for (const { key, val } of promptFields) {
+        if (val === undefined) continue;
+        if (!val || (typeof val === 'string' && val.trim() === '')) {
           // Reset to default — delete from app_config
-          await db('app_config').where({ key: 'scoring_system_prompt' }).del();
+          await db('app_config').where({ key }).del();
         } else {
           await db.raw(`
             INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-          `, ['scoring_system_prompt', JSON.stringify(scoring_system_prompt)]);
-        }
-      }
-
-      if (meta_system_prompt !== undefined) {
-        if (!meta_system_prompt || meta_system_prompt.trim() === '') {
-          await db('app_config').where({ key: 'meta_system_prompt' }).del();
-        } else {
-          await db.raw(`
-            INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-          `, ['meta_system_prompt', JSON.stringify(meta_system_prompt)]);
+          `, [key, JSON.stringify(val)]);
         }
       }
 
@@ -322,10 +314,13 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       return reply.send({
         scoring_system_prompt: custom.scoringSystemPrompt ?? null,
         meta_system_prompt: custom.metaSystemPrompt ?? null,
+        rag_system_prompt: custom.ragSystemPrompt ?? null,
         scoring_is_custom: !!custom.scoringSystemPrompt,
         meta_is_custom: !!custom.metaSystemPrompt,
+        rag_is_custom: !!custom.ragSystemPrompt,
         default_scoring_system_prompt: DEFAULT_SCORE_SYSTEM_PROMPT,
         default_meta_system_prompt: DEFAULT_META_SYSTEM_PROMPT,
+        default_rag_system_prompt: DEFAULT_RAG_SYSTEM_PROMPT,
       });
     },
   );
