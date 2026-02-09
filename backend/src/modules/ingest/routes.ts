@@ -6,7 +6,7 @@ import { localTimestamp } from '../../config/index.js';
 import { normalizeEntry, computeNormalizedHash } from './normalize.js';
 import { redactEvent } from './redact.js';
 import { matchSource } from './sourceMatch.js';
-import type { IngestResponse } from '../../types/index.js';
+import type { IngestEntry, IngestResponse } from '../../types/index.js';
 
 const MAX_BATCH_SIZE = 1000;
 
@@ -89,7 +89,7 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
         }
 
         // 1. Normalize
-        const normalized = normalizeEntry(entry);
+        const normalized = normalizeEntry(entry as IngestEntry);
         if (!normalized) {
           rejected++;
           errors.push(`Entry ${i}: missing or empty "message" field.`);
