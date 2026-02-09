@@ -506,21 +506,56 @@ input:focus-visible,
   word-break: break-word;
 }
 
-.recommended-action {
-  margin-top: 8px;
-  color: var(--orange);
-}
+/* ── Meta Analysis Summary (DrillDown) ───────────────── */
 
 .meta-summary {
   background: var(--bg-card);
   border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 24px;
   margin-bottom: 24px;
 }
 
-.meta-summary h4 { margin-bottom: 8px; }
-.meta-summary p { color: var(--text-muted); font-size: 0.9rem; }
+.meta-summary-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.meta-summary-header h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text);
+}
+
+.meta-summary-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.meta-summary-body {
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.meta-summary-recommendation {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: rgba(251, 146, 60, 0.08);
+  border-left: 3px solid var(--orange);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.93rem;
+  line-height: 1.6;
+}
+
+.meta-summary-recommendation strong {
+  color: var(--orange);
+  margin-right: 4px;
+}
 
 .findings-list {
   list-style: none;

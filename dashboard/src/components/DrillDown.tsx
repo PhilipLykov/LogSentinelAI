@@ -387,12 +387,17 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
       {/* ── Meta summary ── */}
       {meta && (
         <div className="meta-summary">
-          <h4>Meta Analysis Summary</h4>
-          <p>{meta.summary}</p>
+          <div className="meta-summary-header">
+            <span className="meta-summary-icon">&#x1F9E0;</span>
+            <h4>Meta Analysis Summary</h4>
+          </div>
+          <div className="meta-summary-body">
+            {meta.summary}
+          </div>
           {meta.recommended_action && (
-            <p className="recommended-action">
-              Recommended: {meta.recommended_action}
-            </p>
+            <div className="meta-summary-recommendation">
+              <strong>Recommended:</strong> {meta.recommended_action}
+            </div>
           )}
         </div>
       )}
