@@ -57,9 +57,57 @@ const CHANNEL_FIELDS: Record<ChannelType, FieldDef[]> = {
     { key: 'token_ref', label: 'App Token', placeholder: 'env:GOTIFY_APP_TOKEN', required: true, type: 'password', hint: 'Gotify app token or env: reference' },
   ],
   telegram: [
-    { key: 'token_ref', label: 'Bot Token', placeholder: 'env:TELEGRAM_BOT_TOKEN', required: true, type: 'password', hint: 'Telegram bot token or env: reference' },
-    { key: 'chat_id', label: 'Chat ID', placeholder: '-1001234567890', required: true, type: 'text', hint: 'Telegram chat/group ID' },
+    { key: 'token_ref', label: 'Bot Token', placeholder: '1234567890:AABBccdd-EEffGGhhIIjj', required: true, type: 'password', hint: 'Bot token from @BotFather (format: 1234567890:AAxx...)' },
+    { key: 'chat_id', label: 'Chat ID', placeholder: '123456789', required: true, type: 'text', hint: 'Numeric chat/group ID (see setup guide below)' },
   ],
+};
+
+/** Per-type setup instructions shown inside the channel form modal. */
+const CHANNEL_SETUP_GUIDES: Partial<Record<ChannelType, { title: string; steps: string[] }>> = {
+  telegram: {
+    title: 'Telegram Setup Guide',
+    steps: [
+      '1. Open Telegram and search for @BotFather.',
+      '2. Send /newbot and follow the prompts to create a bot.',
+      '3. Copy the Bot Token (looks like 1234567890:AABBccdd-EEff...) and paste it in the "Bot Token" field above.',
+      '4. To get your Chat ID: search for @userinfobot on Telegram, send /start, and it will reply with your numeric ID.',
+      '5. For a group chat: add the bot to the group, send a message, then open https://api.telegram.org/bot<TOKEN>/getUpdates in a browser. Look for "chat":{"id":-100...} — that negative number is the Chat ID.',
+      '6. Important: you must start a conversation with the bot first (/start) before it can send you messages.',
+    ],
+  },
+  ntfy: {
+    title: 'NTfy Setup Guide',
+    steps: [
+      '1. Install the ntfy app on your phone (Android/iOS) or use the web UI at ntfy.sh.',
+      '2. Subscribe to a topic (e.g., "my-syslog-alerts").',
+      '3. Enter the topic name in the "Topic" field above.',
+      '4. For self-hosted ntfy, set the Server URL. Leave it empty to use the public ntfy.sh.',
+    ],
+  },
+  pushover: {
+    title: 'Pushover Setup Guide',
+    steps: [
+      '1. Sign up at pushover.net and install the Pushover app.',
+      '2. Create an application in the Pushover dashboard to get an App Token.',
+      '3. Find your User Key on the Pushover dashboard main page.',
+      '4. Enter both values above. Use env:VAR_NAME to reference Docker environment variables.',
+    ],
+  },
+  gotify: {
+    title: 'Gotify Setup Guide',
+    steps: [
+      '1. Set up a Gotify server (self-hosted).',
+      '2. Create an Application in the Gotify web UI and copy the App Token.',
+      '3. Enter the Gotify server URL and the App Token above.',
+    ],
+  },
+  webhook: {
+    title: 'Webhook Setup',
+    steps: [
+      '1. Enter the URL that will receive POST requests with a JSON alert payload.',
+      '2. The payload includes: title, body, severity, variant (firing/resolved), system_name, criterion.',
+    ],
+  },
 };
 
 // ── Component ────────────────────────────────────────────────
@@ -488,6 +536,22 @@ function ChannelFormModal({
               {f.hint && <span className="form-hint">{f.hint}</span>}
             </div>
           ))}
+
+          {/* Setup guide for the selected channel type */}
+          {CHANNEL_SETUP_GUIDES[type] && (
+            <details className="channel-setup-guide" open={mode === 'create'}>
+              <summary>{CHANNEL_SETUP_GUIDES[type]!.title}</summary>
+              <ol className="channel-setup-steps">
+                {CHANNEL_SETUP_GUIDES[type]!.steps.map((step, i) => (
+                  <li key={i}>{step.replace(/^\d+\.\s*/, '')}</li>
+                ))}
+              </ol>
+              <p className="form-hint" style={{ marginTop: '8px' }}>
+                <strong>Tip:</strong> For sensitive values (tokens), you can use <code>env:VAR_NAME</code> to
+                reference an environment variable from the Docker container instead of storing the value directly.
+              </p>
+            </details>
+          )}
 
           <div className="modal-actions">
             <button type="submit" className="btn" disabled={saving}>
