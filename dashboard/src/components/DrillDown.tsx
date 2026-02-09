@@ -139,6 +139,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
       const data = await fetchEventScores(system.id, {
         criterion_id: criterion.id,
         limit: 50,
+        min_score: 0.001, // only events that actually scored > 0 for this criterion
       });
       setCriterionEvents(data);
     } catch (err: unknown) {
@@ -303,82 +304,121 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
       )}
 
       {/* ── Criterion drill-down panel ── */}
-      {selectedCriterion && (
-        <div className="criterion-drilldown">
-          <div className="criterion-drilldown-header">
-            <h4>
-              Events scored for: <span className="criterion-drilldown-name">{CRITERIA_LABELS[selectedCriterion] ?? selectedCriterion}</span>
-            </h4>
-            <button
-              className="btn btn-xs btn-outline"
-              onClick={() => { setSelectedCriterion(null); setCriterionEvents([]); }}
-            >
-              Close
-            </button>
-          </div>
+      {selectedCriterion && (() => {
+        const scoreInfo = system.scores[selectedCriterion];
+        const effectivePct = scoreInfo ? Math.round(scoreInfo.effective * 100) : 0;
+        const metaPct = scoreInfo ? Math.round(scoreInfo.meta * 100) : 0;
+        const maxEventPct = scoreInfo ? Math.round(scoreInfo.max_event * 100) : 0;
+        const criterionLabel = CRITERIA_LABELS[selectedCriterion] ?? selectedCriterion;
 
-          {criterionLoading && (
-            <div className="settings-loading"><div className="spinner" /> Loading scored events…</div>
-          )}
-          {criterionError && <div className="error-msg" role="alert">{criterionError}</div>}
-
-          {!criterionLoading && !criterionError && criterionEvents.length === 0 && (
-            <div className="criterion-drilldown-empty">
-              No events have been scored for this criterion yet. Events are scored by the AI pipeline every 5 minutes.
+        return (
+          <div className="criterion-drilldown">
+            <div className="criterion-drilldown-header">
+              <h4>
+                Events scored for: <span className="criterion-drilldown-name">{criterionLabel}</span>
+              </h4>
+              <button
+                className="btn btn-xs btn-outline"
+                onClick={() => { setSelectedCriterion(null); setCriterionEvents([]); }}
+              >
+                Close
+              </button>
             </div>
-          )}
 
-          {!criterionLoading && criterionEvents.length > 0 && (
-            <div className="table-responsive">
-              <table className="criterion-events-table" aria-label={`Events scored for ${CRITERIA_LABELS[selectedCriterion]}`}>
-                <thead>
-                  <tr>
-                    <th>Score</th>
-                    <th>Severity</th>
-                    <th>Time</th>
-                    <th>Host</th>
-                    <th>Source IP</th>
-                    <th>Program</th>
-                    <th>Message</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {criterionEvents.map((ev, idx) => {
-                    const pct = Math.round(ev.score * 100);
-                    return (
-                      <tr key={`${ev.event_id}-${idx}`} className="criterion-event-row">
-                        <td className="criterion-score-cell">
-                          <span
-                            className="criterion-score-badge"
-                            style={{ color: scoreColorFromValue(ev.score) }}
-                          >
-                            {pct}%
-                          </span>
-                        </td>
-                        <td>
-                          {ev.severity && (
-                            <span className={`severity-badge ${ev.severity.toLowerCase()}`}>
-                              {ev.severity}
+            {/* Score breakdown: meta vs event components */}
+            {scoreInfo && effectivePct > 0 && (
+              <div className="criterion-score-breakdown">
+                <span className="breakdown-item">
+                  <strong>Dashboard Score:</strong>{' '}
+                  <span style={{ color: scoreColorFromValue(scoreInfo.effective) }}>{effectivePct}%</span>
+                </span>
+                <span className="breakdown-separator">= </span>
+                <span className="breakdown-item" title="Score from AI meta-analysis (holistic assessment of all events together)">
+                  Meta-analysis: <span style={{ color: metaPct > 0 ? scoreColorFromValue(scoreInfo.meta) : 'var(--muted)' }}>{metaPct}%</span>
+                  <span className="breakdown-weight"> (&times;70%)</span>
+                </span>
+                <span className="breakdown-separator"> + </span>
+                <span className="breakdown-item" title="Highest individual event score for this criterion">
+                  Max event: <span style={{ color: maxEventPct > 0 ? scoreColorFromValue(scoreInfo.max_event) : 'var(--muted)' }}>{maxEventPct}%</span>
+                  <span className="breakdown-weight"> (&times;30%)</span>
+                </span>
+              </div>
+            )}
+
+            {criterionLoading && (
+              <div className="settings-loading"><div className="spinner" /> Loading scored events…</div>
+            )}
+            {criterionError && <div className="error-msg" role="alert">{criterionError}</div>}
+
+            {!criterionLoading && !criterionError && criterionEvents.length === 0 && (
+              <div className="criterion-drilldown-empty">
+                {effectivePct > 0 && metaPct > 0 && maxEventPct === 0 ? (
+                  <>
+                    No individual events scored above 0% for <strong>{criterionLabel}</strong>.
+                    The dashboard score of {effectivePct}% comes entirely from the{' '}
+                    <strong>AI meta-analysis</strong> ({metaPct}%), which evaluates all events holistically
+                    and detected concerns relevant to this criterion across the event pattern.
+                  </>
+                ) : (
+                  <>
+                    No events have been scored for this criterion yet. Events are scored by the AI pipeline every 5 minutes.
+                  </>
+                )}
+              </div>
+            )}
+
+            {!criterionLoading && criterionEvents.length > 0 && (
+              <div className="table-responsive">
+                <table className="criterion-events-table" aria-label={`Events scored for ${criterionLabel}`}>
+                  <thead>
+                    <tr>
+                      <th>Score</th>
+                      <th>Severity</th>
+                      <th>Time</th>
+                      <th>Host</th>
+                      <th>Source IP</th>
+                      <th>Program</th>
+                      <th>Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {criterionEvents.map((ev, idx) => {
+                      const pct = Math.round(ev.score * 100);
+                      return (
+                        <tr key={`${ev.event_id}-${idx}`} className="criterion-event-row">
+                          <td className="criterion-score-cell">
+                            <span
+                              className="criterion-score-badge"
+                              style={{ color: scoreColorFromValue(ev.score) }}
+                            >
+                              {pct}%
                             </span>
-                          )}
-                        </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{safeDate(ev.timestamp)}</td>
-                        <td>{ev.host ?? '—'}</td>
-                        <td>{ev.source_ip ?? '—'}</td>
-                        <td>{ev.program ?? '—'}</td>
-                        <td className="criterion-message-cell">{ev.message}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {criterionEvents.length >= 50 && (
-                <p className="truncation-notice">Showing the top 50 events by score.</p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+                          </td>
+                          <td>
+                            {ev.severity && (
+                              <span className={`severity-badge ${ev.severity.toLowerCase()}`}>
+                                {ev.severity}
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{safeDate(ev.timestamp)}</td>
+                          <td>{ev.host ?? '—'}</td>
+                          <td>{ev.source_ip ?? '—'}</td>
+                          <td>{ev.program ?? '—'}</td>
+                          <td className="criterion-message-cell">{ev.message}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {criterionEvents.length >= 50 && (
+                  <p className="truncation-notice">Showing the top 50 events by score.</p>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {error && <div className="error-msg" role="alert">{error}</div>}
       {loading && (

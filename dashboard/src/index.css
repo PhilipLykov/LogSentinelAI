@@ -452,6 +452,37 @@ input:focus-visible,
   font-size: 0.9rem;
   padding: 16px 0;
   text-align: center;
+  line-height: 1.6;
+}
+
+/* ── Score breakdown bar ── */
+.criterion-score-breakdown {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.breakdown-item {
+  white-space: nowrap;
+}
+
+.breakdown-separator {
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-weight: 600;
+}
+
+.breakdown-weight {
+  opacity: 0.5;
+  font-size: 0.78rem;
 }
 
 /* ── Criterion events table ── */

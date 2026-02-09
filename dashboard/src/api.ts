@@ -769,11 +769,12 @@ export interface EventScoreRecord {
 
 export async function fetchEventScores(
   systemId: string,
-  opts?: { criterion_id?: number; limit?: number },
+  opts?: { criterion_id?: number; limit?: number; min_score?: number },
 ): Promise<EventScoreRecord[]> {
   const params = new URLSearchParams();
   if (opts?.criterion_id) params.set('criterion_id', String(opts.criterion_id));
   if (opts?.limit) params.set('limit', String(opts.limit));
+  if (opts?.min_score !== undefined) params.set('min_score', String(opts.min_score));
   return apiFetch(`/api/v1/systems/${systemId}/event-scores?${params}`);
 }
 

@@ -98,7 +98,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
   //    Used by the criterion drill-down UI.
   app.get<{
     Params: { systemId: string };
-    Querystring: { criterion_id?: string; limit?: string };
+    Querystring: { criterion_id?: string; limit?: string; min_score?: string };
   }>(
     '/api/v1/systems/:systemId/event-scores',
     { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
@@ -107,6 +107,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       const criterionId = request.query.criterion_id;
       const rawLimit = Number(request.query.limit ?? 50);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 200) : 50;
+      const minScore = Number(request.query.min_score ?? 0);
 
       let query = db('event_scores')
         .join('events', 'event_scores.event_id', 'events.id')
@@ -132,6 +133,12 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
 
       if (criterionId) {
         query = query.where('event_scores.criterion_id', Number(criterionId));
+      }
+
+      // Filter out zero-score events (only return events that actually
+      // contributed to the criterion score)
+      if (minScore > 0) {
+        query = query.where('event_scores.score', '>', 0);
       }
 
       const rows = await query;
