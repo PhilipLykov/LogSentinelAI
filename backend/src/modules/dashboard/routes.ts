@@ -149,6 +149,95 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
     },
   );
 
+  // ── Findings: persistent, per-system findings with acknowledge ──
+
+  // List findings for a system, filterable by status
+  app.get<{
+    Params: { id: string };
+    Querystring: { status?: string; limit?: string };
+  }>(
+    '/api/v1/systems/:id/findings',
+    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    async (request, reply) => {
+      const { id } = request.params;
+      const statusFilter = request.query.status; // 'open', 'acknowledged', 'resolved', or 'active' (open+acknowledged)
+      const rawLimit = Number(request.query.limit ?? 100);
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 500) : 100;
+
+      let query = db('findings')
+        .where({ system_id: id })
+        .orderBy('created_at', 'desc')
+        .limit(limit);
+
+      if (statusFilter === 'active') {
+        // Active = open + acknowledged (not resolved)
+        query = query.whereIn('status', ['open', 'acknowledged']);
+      } else if (statusFilter && ['open', 'acknowledged', 'resolved'].includes(statusFilter)) {
+        query = query.where({ status: statusFilter });
+      }
+
+      const rows = await query.select('*');
+      return reply.send(rows);
+    },
+  );
+
+  // Acknowledge a finding
+  app.put<{ Params: { findingId: string } }>(
+    '/api/v1/findings/:findingId/acknowledge',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { findingId } = request.params;
+
+      const finding = await db('findings').where({ id: findingId }).first();
+      if (!finding) {
+        return reply.code(404).send({ error: 'Finding not found' });
+      }
+      if (finding.status === 'resolved') {
+        return reply.code(400).send({ error: 'Cannot acknowledge a resolved finding' });
+      }
+
+      const now = new Date().toISOString();
+      await db('findings')
+        .where({ id: findingId })
+        .update({
+          status: 'acknowledged',
+          acknowledged_at: now,
+          acknowledged_by: 'admin', // Future: extract from auth context
+        });
+
+      const updated = await db('findings').where({ id: findingId }).first();
+      return reply.send(updated);
+    },
+  );
+
+  // Re-open an acknowledged finding (undo)
+  app.put<{ Params: { findingId: string } }>(
+    '/api/v1/findings/:findingId/reopen',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { findingId } = request.params;
+
+      const finding = await db('findings').where({ id: findingId }).first();
+      if (!finding) {
+        return reply.code(404).send({ error: 'Finding not found' });
+      }
+      if (finding.status !== 'acknowledged') {
+        return reply.code(400).send({ error: 'Only acknowledged findings can be reopened' });
+      }
+
+      await db('findings')
+        .where({ id: findingId })
+        .update({
+          status: 'open',
+          acknowledged_at: null,
+          acknowledged_by: null,
+        });
+
+      const updated = await db('findings').where({ id: findingId }).first();
+      return reply.send(updated);
+    },
+  );
+
   // ── SSE: score updates stream ──────────────────────────────
   app.get(
     '/api/v1/scores/stream',

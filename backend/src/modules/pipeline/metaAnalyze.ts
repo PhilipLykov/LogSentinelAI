@@ -1,15 +1,27 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
-import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
+import {
+  type LlmAdapter,
+  type ScoreResult,
+  type MetaAnalysisContext,
+} from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
 
 const DEFAULT_W_META = 0.7;
+/** Number of previous window summaries to include as context. */
+const CONTEXT_WINDOW_SIZE = 5;
 
 /**
- * Meta-analyze a window: gather events + scores, call LLM, store meta_results,
- * compute effective scores. All writes in a single transaction.
+ * Meta-analyze a window: gather events + scores, build historical context,
+ * call LLM, store meta_results + findings, compute effective scores.
+ *
+ * The "sliding context window" approach:
+ *   - Last N window summaries are included so the LLM can spot trends.
+ *   - Currently open (unacknowledged, unresolved) findings are sent so the
+ *     LLM can decide which are still relevant and which should be resolved.
+ *   - New findings are persisted individually in the `findings` table.
  */
 export async function metaAnalyzeWindow(
   db: Knex,
@@ -28,7 +40,7 @@ export async function metaAnalyzeWindow(
   const sources = await db('log_sources').where({ system_id: system.id }).select('label');
   const sourceLabels = sources.map((s: any) => s.label);
 
-  // Gather events in window
+  // ── Gather events in window ─────────────────────────────
   const events = await db('events')
     .where({ system_id: system.id })
     .where('timestamp', '>=', window.from_ts)
@@ -42,7 +54,7 @@ export async function metaAnalyzeWindow(
     return;
   }
 
-  // Gather per-event scores for context (batched for large event sets)
+  // ── Gather per-event scores ─────────────────────────────
   const eventIds = events.map((e: any) => e.id);
   const allScores: any[] = [];
   for (let i = 0; i < eventIds.length; i += 100) {
@@ -90,33 +102,68 @@ export async function metaAnalyzeWindow(
     occurrenceCount: g.count,
   }));
 
-  // Call LLM for meta-analysis
+  // ── Build historical context (sliding window) ───────────
+  const context = await buildMetaContext(db, system.id, windowId);
+
+  // ── Call LLM for meta-analysis ──────────────────────────
   const { result, usage } = await llm.metaAnalyze(
     eventsForLlm,
     system.description ?? '',
     sourceLabels,
+    context,
   );
 
-  // Store everything in a transaction for consistency
+  // ── Persist everything in a transaction ─────────────────
   await db.transaction(async (trx) => {
-    // Store meta_result
+    // Store meta_result (findings field kept for backward compat / fallback display)
     const metaId = uuidv4();
     await trx('meta_results').insert({
       id: metaId,
       window_id: windowId,
       meta_scores: JSON.stringify(result.meta_scores),
       summary: result.summary,
-      findings: JSON.stringify(result.findings),
+      findings: JSON.stringify(result.findingsFlat),
       recommended_action: result.recommended_action ?? null,
       key_event_ids: result.key_event_ids ? JSON.stringify(result.key_event_ids) : null,
     });
 
-    // Compute effective scores per criterion
+    // ── Persist structured findings ─────────────────────
+    for (const finding of result.findings) {
+      await trx('findings').insert({
+        id: uuidv4(),
+        system_id: system.id,
+        meta_result_id: metaId,
+        text: finding.text,
+        severity: finding.severity,
+        criterion_slug: finding.criterion ?? null,
+        status: 'open',
+      });
+    }
+
+    // ── Mark resolved findings ──────────────────────────
+    if (result.resolvedFindingIndices.length > 0 && context.openFindings.length > 0) {
+      const resolvedNow = new Date().toISOString();
+      for (const idx of result.resolvedFindingIndices) {
+        const openFinding = context.openFindings.find((f) => f.index === idx);
+        if (!openFinding) continue;
+        // The _dbId was stored when we built the context
+        const dbId = (openFinding as any)._dbId;
+        if (!dbId) continue;
+        await trx('findings')
+          .where({ id: dbId, status: 'open' })
+          .update({
+            status: 'resolved',
+            resolved_at: resolvedNow,
+            resolved_by_meta_id: metaId,
+          });
+      }
+    }
+
+    // ── Compute effective scores per criterion ──────────
     const now = new Date().toISOString();
     for (const criterion of CRITERIA) {
       const metaScore = (result.meta_scores as any)[criterion.slug] ?? 0;
 
-      // Max per-event score for this criterion in this window
       const maxEventRow = await trx('event_scores')
         .whereIn('event_id', eventIds)
         .where({ criterion_id: criterion.id })
@@ -124,11 +171,8 @@ export async function metaAnalyzeWindow(
         .first();
 
       const maxEventScore = Number(maxEventRow?.max_score ?? 0);
-
-      // Blend: effective = w_meta * meta + (1 - w_meta) * max(per_event)
       const effectiveValue = wMeta * metaScore + (1 - wMeta) * maxEventScore;
 
-      // Upsert effective_scores
       await trx.raw(`
         INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -140,7 +184,7 @@ export async function metaAnalyzeWindow(
       `, [windowId, system.id, criterion.id, effectiveValue, metaScore, maxEventScore, now]);
     }
 
-    // Track LLM usage (model + cost locked in at insert time)
+    // ── Track LLM usage ─────────────────────────────────
     await trx('llm_usage').insert({
       id: uuidv4(),
       run_type: 'meta',
@@ -156,6 +200,61 @@ export async function metaAnalyzeWindow(
   });
 
   console.log(
-    `[${localTimestamp()}] Meta-analyze window ${windowId}: ${events.length} events, ${eventsForLlm.length} templates, tokens=${usage.token_input + usage.token_output}`,
+    `[${localTimestamp()}] Meta-analyze window ${windowId}: ` +
+    `${events.length} events, ${eventsForLlm.length} templates, ` +
+    `${result.findings.length} new findings, ${result.resolvedFindingIndices.length} resolved, ` +
+    `tokens=${usage.token_input + usage.token_output}`,
   );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Context builder — gathers historical data for the LLM's
+// "sliding context window".
+// ────────────────────────────────────────────────────────────────
+
+async function buildMetaContext(
+  db: Knex,
+  systemId: string,
+  currentWindowId: string,
+): Promise<MetaAnalysisContext & { openFindings: Array<{ index: number; text: string; severity: string; criterion?: string; _dbId: string }> }> {
+  // 1. Previous window summaries (last N, excluding the current window)
+  const prevMetas = await db('meta_results')
+    .join('windows', 'meta_results.window_id', 'windows.id')
+    .where('windows.system_id', systemId)
+    .whereNot('windows.id', currentWindowId)
+    .orderBy('windows.to_ts', 'desc')
+    .limit(CONTEXT_WINDOW_SIZE)
+    .select('meta_results.summary', 'windows.from_ts', 'windows.to_ts');
+
+  const previousSummaries = prevMetas.map((m: any) => ({
+    windowTime: `${formatShort(m.from_ts)} – ${formatShort(m.to_ts)}`,
+    summary: m.summary,
+  }));
+
+  // 2. Currently open findings for this system (not acknowledged, not resolved)
+  const openRows = await db('findings')
+    .where({ system_id: systemId, status: 'open' })
+    .orderBy('created_at', 'desc')
+    .limit(30) // Cap to avoid huge prompts
+    .select('id', 'text', 'severity', 'criterion_slug');
+
+  const openFindings = openRows.map((f: any, i: number) => ({
+    index: i,
+    text: f.text,
+    severity: f.severity,
+    criterion: f.criterion_slug ?? undefined,
+    _dbId: f.id, // internal: used to resolve by DB ID later
+  }));
+
+  return { previousSummaries, openFindings };
+}
+
+/** Format a timestamp concisely for the LLM context. */
+function formatShort(ts: string): string {
+  try {
+    const d = new Date(ts);
+    return d.toISOString().replace('T', ' ').slice(0, 19);
+  } catch {
+    return ts;
+  }
 }

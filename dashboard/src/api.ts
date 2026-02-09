@@ -108,6 +108,41 @@ export interface MetaResult {
   recommended_action?: string;
 }
 
+// ── Findings (persistent, per-system) ────────────────────────
+
+export interface Finding {
+  id: string;
+  system_id: string;
+  meta_result_id: string;
+  text: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  criterion_slug: string | null;
+  status: 'open' | 'acknowledged' | 'resolved';
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+  resolved_at: string | null;
+  resolved_by_meta_id: string | null;
+  created_at: string;
+}
+
+export async function fetchFindings(
+  systemId: string,
+  opts?: { status?: 'open' | 'acknowledged' | 'resolved' | 'active'; limit?: number },
+): Promise<Finding[]> {
+  const params = new URLSearchParams();
+  if (opts?.status) params.set('status', opts.status);
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  return apiFetch(`/api/v1/systems/${systemId}/findings?${params}`);
+}
+
+export async function acknowledgeFinding(findingId: string): Promise<Finding> {
+  return apiFetch(`/api/v1/findings/${findingId}/acknowledge`, { method: 'PUT' });
+}
+
+export async function reopenFinding(findingId: string): Promise<Finding> {
+  return apiFetch(`/api/v1/findings/${findingId}/reopen`, { method: 'PUT' });
+}
+
 // ── Dashboard API calls ──────────────────────────────────────
 
 export async function fetchDashboardSystems(): Promise<DashboardSystem[]> {

@@ -4,12 +4,19 @@ import {
   type LogEvent,
   type MetaResult,
   type EventScoreRecord,
+  type Finding,
   CRITERIA,
   fetchSystemEvents,
   fetchSystemMeta,
   fetchEventScores,
+  fetchFindings,
+  acknowledgeFinding,
+  reopenFinding,
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
+
+/** Auto-refresh interval for findings (ms). */
+const FINDINGS_POLL_INTERVAL = 60_000; // 60 seconds
 
 interface DrillDownProps {
   system: DashboardSystem;
@@ -31,10 +38,17 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
   const [criterionLoading, setCriterionLoading] = useState(false);
   const [criterionError, setCriterionError] = useState('');
 
+  // Findings state
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [findingsLoading, setFindingsLoading] = useState(false);
+  const [findingsTab, setFindingsTab] = useState<'open' | 'acknowledged' | 'resolved'>('open');
+  const [ackingId, setAckingId] = useState<string | null>(null);
+
   // Stable reference for auth error handler
   const onAuthErrorRef = useRef(onAuthError);
   onAuthErrorRef.current = onAuthError;
 
+  // ── Load events + meta ──────────────────────────────────
   const loadData = useCallback(() => {
     setLoading(true);
     setError('');
@@ -58,9 +72,36 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
       .finally(() => setLoading(false));
   }, [system.id]);
 
+  // ── Load findings ───────────────────────────────────────
+  const loadFindings = useCallback(async () => {
+    setFindingsLoading(true);
+    try {
+      // Fetch all findings (including resolved for display)
+      const all = await fetchFindings(system.id, { limit: 200 });
+      setFindings(all);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) {
+        onAuthErrorRef.current();
+      }
+      // Don't set error for findings — just keep stale data
+    } finally {
+      setFindingsLoading(false);
+    }
+  }, [system.id]);
+
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    loadFindings();
+  }, [loadData, loadFindings]);
+
+  // ── Auto-refresh findings ───────────────────────────────
+  useEffect(() => {
+    const timer = setInterval(() => {
+      loadFindings();
+    }, FINDINGS_POLL_INTERVAL);
+    return () => clearInterval(timer);
+  }, [loadFindings]);
 
   // Move focus to heading on mount for accessibility
   useEffect(() => {
@@ -73,7 +114,6 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
 
   // ── Criterion click handler ─────────────────────────────
   const handleCriterionClick = useCallback(async (slug: string) => {
-    // Toggle off if already selected
     if (selectedCriterion === slug) {
       setSelectedCriterion(null);
       setCriterionEvents([]);
@@ -84,7 +124,6 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
     setCriterionLoading(true);
     setCriterionError('');
 
-    // Find criterion ID from slug
     const criterion = CRITERIA.find((c) => c.slug === slug);
     if (!criterion) {
       setCriterionError(`Unknown criterion: ${slug}`);
@@ -109,6 +148,49 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
       setCriterionLoading(false);
     }
   }, [selectedCriterion, system.id]);
+
+  // ── Finding acknowledge / reopen ────────────────────────
+  const handleAcknowledge = useCallback(async (findingId: string) => {
+    setAckingId(findingId);
+    try {
+      const updated = await acknowledgeFinding(findingId);
+      setFindings((prev) => prev.map((f) => (f.id === findingId ? updated : f)));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) {
+        onAuthErrorRef.current();
+        return;
+      }
+      // Silently swallow — user can try again
+    } finally {
+      setAckingId(null);
+    }
+  }, []);
+
+  const handleReopen = useCallback(async (findingId: string) => {
+    setAckingId(findingId);
+    try {
+      const updated = await reopenFinding(findingId);
+      setFindings((prev) => prev.map((f) => (f.id === findingId ? updated : f)));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) {
+        onAuthErrorRef.current();
+        return;
+      }
+    } finally {
+      setAckingId(null);
+    }
+  }, []);
+
+  // ── Compute filtered findings ───────────────────────────
+  const openFindings = findings.filter((f) => f.status === 'open');
+  const ackedFindings = findings.filter((f) => f.status === 'acknowledged');
+  const resolvedFindings = findings.filter((f) => f.status === 'resolved');
+  const displayedFindings =
+    findingsTab === 'open' ? openFindings :
+    findingsTab === 'acknowledged' ? ackedFindings :
+    resolvedFindings;
 
   return (
     <div className="drill-down">
@@ -223,7 +305,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
         </div>
       )}
 
-      {/* Meta summary */}
+      {/* ── Meta summary ── */}
       {meta && (
         <div className="meta-summary">
           <h4>Meta Analysis Summary</h4>
@@ -233,12 +315,100 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
               Recommended: {meta.recommended_action}
             </p>
           )}
-          {meta.findings.length > 0 && (
-            <ul className="findings-list" role="list">
-              {meta.findings.map((f, i) => (
-                <li key={i}>{f}</li>
+        </div>
+      )}
+
+      {/* ── Persistent Findings panel ── */}
+      {!loading && (
+        <div className="findings-panel">
+          <div className="findings-panel-header">
+            <h4>AI Findings</h4>
+            <div className="findings-tabs">
+              <button
+                className={`findings-tab${findingsTab === 'open' ? ' active' : ''}`}
+                onClick={() => setFindingsTab('open')}
+              >
+                Open{openFindings.length > 0 && <span className="findings-tab-count">{openFindings.length}</span>}
+              </button>
+              <button
+                className={`findings-tab${findingsTab === 'acknowledged' ? ' active' : ''}`}
+                onClick={() => setFindingsTab('acknowledged')}
+              >
+                Ack&apos;d{ackedFindings.length > 0 && <span className="findings-tab-count">{ackedFindings.length}</span>}
+              </button>
+              <button
+                className={`findings-tab${findingsTab === 'resolved' ? ' active' : ''}`}
+                onClick={() => setFindingsTab('resolved')}
+              >
+                Resolved{resolvedFindings.length > 0 && <span className="findings-tab-count">{resolvedFindings.length}</span>}
+              </button>
+            </div>
+            <button className="btn btn-xs btn-outline" onClick={loadFindings} title="Refresh findings">
+              ↻ Refresh
+            </button>
+          </div>
+
+          {findingsLoading && (
+            <div className="settings-loading"><div className="spinner" /> Loading findings…</div>
+          )}
+
+          {displayedFindings.length === 0 && !findingsLoading && (
+            <div className="findings-empty">
+              {findingsTab === 'open' && 'No open findings. The AI has not detected any active issues.'}
+              {findingsTab === 'acknowledged' && 'No acknowledged findings.'}
+              {findingsTab === 'resolved' && 'No resolved findings yet.'}
+            </div>
+          )}
+
+          {displayedFindings.length > 0 && (
+            <div className="findings-list-new">
+              {displayedFindings.map((f) => (
+                <div key={f.id} className={`finding-card finding-status-${f.status}`}>
+                  <div className="finding-card-top">
+                    <span className={`finding-severity finding-severity-${f.severity}`}>
+                      {f.severity}
+                    </span>
+                    {f.criterion_slug && (
+                      <span className="finding-criterion">
+                        {CRITERIA_LABELS[f.criterion_slug] ?? f.criterion_slug}
+                      </span>
+                    )}
+                    <span className="finding-time">{safeDate(f.created_at)}</span>
+                  </div>
+                  <p className="finding-text">{f.text}</p>
+                  <div className="finding-card-actions">
+                    {f.status === 'open' && (
+                      <button
+                        className="btn btn-xs btn-ack"
+                        onClick={() => handleAcknowledge(f.id)}
+                        disabled={ackingId === f.id}
+                      >
+                        {ackingId === f.id ? 'Acknowledging…' : '✓ Acknowledge'}
+                      </button>
+                    )}
+                    {f.status === 'acknowledged' && (
+                      <>
+                        <span className="finding-acked-info">
+                          Ack&apos;d {f.acknowledged_at ? safeDate(f.acknowledged_at) : ''}
+                        </span>
+                        <button
+                          className="btn btn-xs btn-outline"
+                          onClick={() => handleReopen(f.id)}
+                          disabled={ackingId === f.id}
+                        >
+                          Reopen
+                        </button>
+                      </>
+                    )}
+                    {f.status === 'resolved' && f.resolved_at && (
+                      <span className="finding-resolved-info">
+                        Resolved by AI {safeDate(f.resolved_at)}
+                      </span>
+                    )}
+                  </div>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </div>
       )}

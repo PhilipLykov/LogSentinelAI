@@ -13,10 +13,30 @@ export interface ScoreResult {
   reason_codes?: Record<CriterionSlug, string[]>;
 }
 
+/** Structured finding returned by the LLM. */
+export interface StructuredFinding {
+  text: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  criterion?: string;  // criterion slug, e.g. 'it_security'
+}
+
+/** Context from previous analysis runs, fed to LLM for continuity. */
+export interface MetaAnalysisContext {
+  /** Summaries of the most recent N windows (newest first). */
+  previousSummaries: Array<{ windowTime: string; summary: string }>;
+  /** Currently open (unacknowledged, unresolved) findings with their DB index. */
+  openFindings: Array<{ index: number; text: string; severity: string; criterion?: string }>;
+}
+
 export interface MetaAnalysisResult {
   meta_scores: MetaScores;
   summary: string;
-  findings: string[];
+  /** Structured findings (new ones produced by this analysis). */
+  findings: StructuredFinding[];
+  /** Legacy: flat finding strings (kept for backward compat with old meta_results). */
+  findingsFlat: string[];
+  /** Indices (from openFindings) the LLM considers resolved. */
+  resolvedFindingIndices: number[];
   recommended_action?: string;
   key_event_ids?: string[];
 }
@@ -56,6 +76,7 @@ export interface LlmAdapter {
     }>,
     systemDescription: string,
     sourceLabels: string[],
+    context?: MetaAnalysisContext,
   ): Promise<MetaAnalyzeResult>;
 }
 
@@ -78,11 +99,22 @@ Return ONLY valid JSON with the "scores" array.`;
 
 const META_SYSTEM_PROMPT = `You are an expert IT log analyst performing a meta-analysis of a batch of log events from a single monitored system over a time window.
 
+You will receive the current window's events AND context from previous analysis windows (summaries and currently open findings). Use the previous context to:
+1. Spot trends that span multiple windows (e.g. recurring errors, escalating problems).
+2. Decide whether previously reported findings are still relevant or can be resolved.
+3. Avoid repeating findings that are still open — only create NEW findings for genuinely new observations.
+
 Return a JSON object with:
 - meta_scores: object with 6 keys (it_security, performance_degradation, failure_prediction, anomaly, compliance_audit, operational_risk), each a float 0.0–1.0
-- summary: 1-3 sentence summary of the window's findings
-- findings: array of specific finding strings
+- summary: 2-4 sentence summary of the window's findings, referencing trends if visible
+- new_findings: array of NEW finding objects, each with:
+    - text: specific finding description (actionable, concise)
+    - severity: one of "critical", "high", "medium", "low", "info"
+    - criterion: most relevant criterion slug (it_security, performance_degradation, failure_prediction, anomaly, compliance_audit, operational_risk) or null
+- resolved_indices: array of integer indices from the "Previously open findings" list that are NO LONGER relevant based on the current window (e.g. an issue that has stopped occurring). Only include indices that clearly should be closed.
 - recommended_action: one short recommended action (optional)
+
+Important: produce at least 3-5 findings per analysis when there are notable events. Be specific and actionable. Reference event patterns, hosts, programs, or error messages where relevant.
 
 Return ONLY valid JSON.`;
 
@@ -165,30 +197,51 @@ export class OpenAiAdapter implements LlmAdapter {
     }>,
     systemDescription: string,
     sourceLabels: string[],
+    context?: MetaAnalysisContext,
   ): Promise<MetaAnalyzeResult> {
-    const userContent = [
+    const sections: string[] = [
       `System: ${systemDescription}`,
       `Sources: ${sourceLabels.join(', ')}`,
-      `Event count: ${eventsWithScores.length}`,
-      '',
-      'Events in window:',
-      ...eventsWithScores.map((e, i) => {
-        let line = `[${i + 1}] ${e.severity ? `[${e.severity}]` : ''} ${e.message}`;
-        if (e.occurrenceCount && e.occurrenceCount > 1) {
-          line += ` (×${e.occurrenceCount})`;
-        }
-        if (e.scores) {
-          const maxScore = Math.max(
-            e.scores.it_security, e.scores.performance_degradation,
-            e.scores.failure_prediction, e.scores.anomaly,
-            e.scores.compliance_audit, e.scores.operational_risk,
-          );
-          line += ` [max_score=${maxScore.toFixed(2)}]`;
-        }
-        return line;
-      }),
-    ].join('\n');
+    ];
 
+    // ── Historical context (sliding window, like a conversation context) ──
+    if (context?.previousSummaries?.length) {
+      sections.push('');
+      sections.push('=== Previous analysis context (most recent first) ===');
+      for (const ps of context.previousSummaries) {
+        sections.push(`[${ps.windowTime}] ${ps.summary}`);
+      }
+    }
+
+    if (context?.openFindings?.length) {
+      sections.push('');
+      sections.push('=== Previously open findings (reference by index to resolve) ===');
+      for (const f of context.openFindings) {
+        sections.push(`  [${f.index}] [${f.severity}]${f.criterion ? ` (${f.criterion})` : ''} ${f.text}`);
+      }
+    }
+
+    // ── Current window events ──
+    sections.push('');
+    sections.push(`=== Current window events (${eventsWithScores.length} total) ===`);
+    for (let i = 0; i < eventsWithScores.length; i++) {
+      const e = eventsWithScores[i];
+      let line = `[${i + 1}] ${e.severity ? `[${e.severity}]` : ''} ${e.message}`;
+      if (e.occurrenceCount && e.occurrenceCount > 1) {
+        line += ` (×${e.occurrenceCount})`;
+      }
+      if (e.scores) {
+        const maxScore = Math.max(
+          e.scores.it_security, e.scores.performance_degradation,
+          e.scores.failure_prediction, e.scores.anomaly,
+          e.scores.compliance_audit, e.scores.operational_risk,
+        );
+        line += ` [max_score=${maxScore.toFixed(2)}]`;
+      }
+      sections.push(line);
+    }
+
+    const userContent = sections.join('\n');
     const response = await this.chatCompletion(META_SYSTEM_PROMPT, userContent);
 
     try {
@@ -203,11 +256,40 @@ export class OpenAiAdapter implements LlmAdapter {
         operational_risk: clamp(parsed.meta_scores?.operational_risk ?? 0),
       };
 
+      // Parse structured findings (new format)
+      const rawNewFindings = Array.isArray(parsed.new_findings) ? parsed.new_findings : [];
+      const structuredFindings: StructuredFinding[] = rawNewFindings.map((f: any) => ({
+        text: typeof f.text === 'string' ? f.text : String(f),
+        severity: (['critical', 'high', 'medium', 'low', 'info'].includes(f.severity) ? f.severity : 'medium') as StructuredFinding['severity'],
+        criterion: typeof f.criterion === 'string' && CRITERIA_SLUGS.includes(f.criterion as CriterionSlug) ? f.criterion : undefined,
+      }));
+
+      // Backward compat: also accept plain "findings" array of strings
+      let flatFindings: string[] = [];
+      if (structuredFindings.length > 0) {
+        flatFindings = structuredFindings.map((f) => f.text);
+      } else if (Array.isArray(parsed.findings)) {
+        // Old-format response (plain string array)
+        flatFindings = parsed.findings.filter((f: unknown) => typeof f === 'string');
+        // Convert to structured with defaults
+        for (const text of flatFindings) {
+          structuredFindings.push({ text, severity: 'medium' });
+        }
+      }
+
+      // Parse resolved indices
+      const rawResolved = Array.isArray(parsed.resolved_indices) ? parsed.resolved_indices : [];
+      const resolvedFindingIndices = rawResolved
+        .filter((v: unknown) => typeof v === 'number' && Number.isFinite(v))
+        .map((v: number) => Math.round(v));
+
       return {
         result: {
           meta_scores: metaScores,
           summary: parsed.summary ?? '',
-          findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+          findings: structuredFindings,
+          findingsFlat: flatFindings,
+          resolvedFindingIndices,
           recommended_action: parsed.recommended_action,
           key_event_ids: parsed.key_event_ids,
         },
