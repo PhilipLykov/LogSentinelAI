@@ -22,6 +22,7 @@ export interface MetaAnalysisResult {
 }
 
 export interface LlmUsageInfo {
+  model: string;
   token_input: number;
   token_output: number;
   request_count: number;
@@ -241,6 +242,7 @@ export class OpenAiAdapter implements LlmAdapter {
       console.warn(`[${localTimestamp()}] LLM returned empty content (model=${this.model})`);
     }
     const usage: LlmUsageInfo = {
+      model: this.model,
       token_input: data.usage?.prompt_tokens ?? 0,
       token_output: data.usage?.completion_tokens ?? 0,
       request_count: 1,

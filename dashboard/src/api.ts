@@ -220,7 +220,7 @@ export interface LlmUsageTotals {
 export interface LlmUsageResponse {
   records: LlmUsageRecord[];
   totals: LlmUsageTotals;
-  model: string;
+  current_model: string;
   pricing: { input: number; output: number } | null;
 }
 

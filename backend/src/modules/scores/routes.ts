@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { CRITERIA } from '../../types/index.js';
+import { estimateCost, MODEL_PRICING } from '../llm/pricing.js';
 
 /**
  * Scores API — exposes effective scores, event scores, and meta results.
@@ -139,31 +140,6 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
 
   // ── LLM usage stats ───────────────────────────────────────
 
-  /**
-   * Pricing table for common OpenAI models (USD per 1 million tokens).
-   * Used to compute cost estimates from token counts.
-   */
-  const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-    'gpt-4o-mini':     { input: 0.15,  output: 0.60  },
-    'gpt-4o':          { input: 2.50,  output: 10.00 },
-    'gpt-4-turbo':     { input: 10.00, output: 30.00 },
-    'gpt-4':           { input: 30.00, output: 60.00 },
-    'gpt-3.5-turbo':   { input: 0.50,  output: 1.50  },
-    'o1':              { input: 15.00, output: 60.00 },
-    'o1-mini':         { input: 3.00,  output: 12.00 },
-    'o3-mini':         { input: 1.10,  output: 4.40  },
-  };
-
-  function estimateCost(
-    tokenInput: number,
-    tokenOutput: number,
-    model: string,
-  ): number | null {
-    const pricing = MODEL_PRICING[model];
-    if (!pricing) return null;
-    return (tokenInput * pricing.input + tokenOutput * pricing.output) / 1_000_000;
-  }
-
   app.get<{ Querystring: { from?: string; to?: string; system_id?: string; limit?: string } }>(
     '/api/v1/llm-usage',
     { preHandler: requireAuth('admin') },
@@ -179,7 +155,9 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
 
       const usage = await query.select('*');
 
-      const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+      // Current model from env (used only as fallback for legacy records
+      // that were inserted before migration 008 added the model column).
+      const currentModel = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
       // Resolve system names for display
       const systemIds = [...new Set(usage.map((r: any) => r.system_id).filter(Boolean))];
@@ -191,15 +169,22 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         }
       }
 
-      // Enrich each record with estimated cost and system name
-      const enrichedRecords = usage.map((r: any) => ({
-        ...r,
-        model,
-        system_name: r.system_id ? (systemNames[r.system_id] ?? 'Unknown') : null,
-        cost_estimate: r.cost_estimate ?? estimateCost(r.token_input, r.token_output, model),
-      }));
+      // Enrich each record:
+      // - model: use stored model, fall back to current env for legacy records
+      // - cost_estimate: use stored cost (locked at insert time), fall back
+      //   to computing from the record's model for legacy records
+      const enrichedRecords = usage.map((r: any) => {
+        const recordModel = r.model || currentModel;
+        return {
+          ...r,
+          model: recordModel,
+          system_name: r.system_id ? (systemNames[r.system_id] ?? 'Unknown') : null,
+          cost_estimate: r.cost_estimate ?? estimateCost(r.token_input, r.token_output, recordModel),
+        };
+      });
 
-      // Totals — apply same filters so totals match the records
+      // Totals — apply same filters, computed over the FULL dataset (not
+      // limited by pagination) so summary cards are always accurate.
       let totalsQuery = db('llm_usage');
       if (request.query.from) totalsQuery = totalsQuery.where('created_at', '>=', request.query.from);
       if (request.query.to) totalsQuery = totalsQuery.where('created_at', '<=', request.query.to);
@@ -209,13 +194,17 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         .sum('token_input as total_input')
         .sum('token_output as total_output')
         .sum('request_count as total_requests')
+        .sum('cost_estimate as total_stored_cost')
         .first();
 
-      // PostgreSQL SUM returns bigint → pg driver serializes as string.
+      // PostgreSQL SUM returns bigint/numeric → pg driver serializes as string.
       // Normalize to numbers for a consistent JSON response contract.
       const totalInput = Number(rawTotals?.total_input ?? 0);
       const totalOutput = Number(rawTotals?.total_output ?? 0);
       const totalRequests = Number(rawTotals?.total_requests ?? 0);
+      const totalStoredCost = rawTotals?.total_stored_cost != null
+        ? Number(rawTotals.total_stored_cost)
+        : null;
 
       return reply.send({
         records: enrichedRecords,
@@ -223,10 +212,14 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
           total_input: totalInput,
           total_output: totalOutput,
           total_requests: totalRequests,
-          total_cost: estimateCost(totalInput, totalOutput, model),
+          // Use DB-level SUM of cost_estimate when available (accurate for
+          // post-migration records with per-record model tracking).
+          // For legacy records where cost_estimate was NULL, the SUM excludes
+          // them — which is more honest than guessing with a single model.
+          total_cost: totalStoredCost,
         },
-        model,
-        pricing: MODEL_PRICING[model] ?? null,
+        current_model: currentModel,
+        pricing: MODEL_PRICING[currentModel] ?? null,
       });
     },
   );

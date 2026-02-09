@@ -3,6 +3,7 @@ import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
 import { extractTemplatesAndDedup } from './dedup.js';
 import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
+import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
 
 const SCORING_BATCH_SIZE = 20; // Max events per LLM call
@@ -55,6 +56,7 @@ export async function runPerEventScoringJob(
   let totalTokenInput = 0;
   let totalTokenOutput = 0;
   let totalRequests = 0;
+  let usedModel = ''; // Captured from the first LLM response
 
   // 3. Score in batches
   for (let i = 0; i < representatives.length; i += SCORING_BATCH_SIZE) {
@@ -96,6 +98,7 @@ export async function runPerEventScoringJob(
         totalTokenInput += usage.token_input;
         totalTokenOutput += usage.token_output;
         totalRequests += usage.request_count;
+        if (!usedModel && usage.model) usedModel = usage.model;
 
         // 4. Write scores only for unscored events in this batch
         for (let j = 0; j < systemBatch.length; j++) {
@@ -132,16 +135,18 @@ export async function runPerEventScoringJob(
     }
   }
 
-  // 5. Track LLM usage
+  // 5. Track LLM usage (model + cost locked in at insert time)
   if (totalRequests > 0) {
     await db('llm_usage').insert({
       id: uuidv4(),
       run_type: 'per_event',
+      model: usedModel || null,
       system_id: options?.systemId ?? null,
       event_count: scored,
       token_input: totalTokenInput,
       token_output: totalTokenOutput,
       request_count: totalRequests,
+      cost_estimate: usedModel ? estimateCost(totalTokenInput, totalTokenOutput, usedModel) : null,
     });
   }
 

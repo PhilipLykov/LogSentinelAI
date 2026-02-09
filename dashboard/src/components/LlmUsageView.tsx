@@ -72,7 +72,7 @@ export function LlmUsageView({ onAuthError }: LlmUsageViewProps) {
       const data: LlmUsageResponse = await fetchLlmUsage(opts);
       setRecords(data.records);
       setTotals(data.totals);
-      setModel(data.model);
+      setModel(data.current_model);
       setPricing(data.pricing);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -109,7 +109,7 @@ export function LlmUsageView({ onAuthError }: LlmUsageViewProps) {
           <h2>AI Usage Log</h2>
           {model && (
             <span className="usage-model-badge">
-              Model: <strong>{model}</strong>
+              Current model: <strong>{model}</strong>
               {pricing && (
                 <span className="usage-pricing-hint">
                   {' '}(${pricing.input}/M in, ${pricing.output}/M out)

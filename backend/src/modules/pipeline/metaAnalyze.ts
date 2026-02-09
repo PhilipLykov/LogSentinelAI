@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
 import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
+import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
 
 const DEFAULT_W_META = 0.7;
@@ -139,16 +140,18 @@ export async function metaAnalyzeWindow(
       `, [windowId, system.id, criterion.id, effectiveValue, metaScore, maxEventScore, now]);
     }
 
-    // Track LLM usage
+    // Track LLM usage (model + cost locked in at insert time)
     await trx('llm_usage').insert({
       id: uuidv4(),
       run_type: 'meta',
+      model: usage.model || null,
       system_id: system.id,
       window_id: windowId,
       event_count: events.length,
       token_input: usage.token_input,
       token_output: usage.token_output,
       request_count: usage.request_count,
+      cost_estimate: usage.model ? estimateCost(usage.token_input, usage.token_output, usage.model) : null,
     });
   });
 
