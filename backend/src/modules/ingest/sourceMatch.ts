@@ -90,7 +90,7 @@ function matchesSelector(event: NormalizedEvent, selector: LogSourceSelector): b
   const entries = Object.entries(selector).filter(([, v]) => v !== undefined && v !== '');
   if (entries.length === 0) return false; // empty selector matches nothing
 
-  for (const [key, value] of entries) {
+  for (const [key, pattern] of entries) {
     let eventValue: unknown = (event as any)[key];
 
     // If key is not a direct event field, check inside raw
@@ -100,10 +100,16 @@ function matchesSelector(event: NormalizedEvent, selector: LogSourceSelector): b
 
     if (eventValue === undefined || eventValue === null) return false;
 
-    const ev = String(eventValue).toLowerCase();
-    const sv = String(value).toLowerCase();
+    const ev = String(eventValue);
 
-    if (ev !== sv && !ev.includes(sv)) return false;
+    // Selector values are regex patterns (case-insensitive)
+    try {
+      const regex = new RegExp(String(pattern), 'i');
+      if (!regex.test(ev)) return false;
+    } catch {
+      // If the pattern is not a valid regex, fall back to exact match (case-insensitive)
+      if (ev.toLowerCase() !== String(pattern).toLowerCase()) return false;
+    }
   }
 
   return true;
