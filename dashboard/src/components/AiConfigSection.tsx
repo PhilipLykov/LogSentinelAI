@@ -3,6 +3,10 @@ import {
   type AiConfigResponse, fetchAiConfig, updateAiConfig,
   type AiPromptsResponse, fetchAiPrompts, updateAiPrompts,
   type AckConfigResponse, fetchAckConfig, updateAckConfig,
+  type TokenOptimizationConfig, type TokenOptResponse,
+  fetchTokenOptConfig, updateTokenOptConfig, invalidateScoreCache,
+  type MetaAnalysisConfig, type MetaAnalysisConfigResponse,
+  fetchMetaAnalysisConfig, updateMetaAnalysisConfig,
 } from '../api';
 
 interface AiConfigSectionProps {
@@ -48,14 +52,33 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [ackSuccess, setAckSuccess] = useState('');
   const [ackError, setAckError] = useState('');
 
+  // Token optimization state
+  const [tokenOpt, setTokenOpt] = useState<TokenOptResponse | null>(null);
+  const [tokCfg, setTokCfg] = useState<TokenOptimizationConfig | null>(null);
+  const [showTokenOpt, setShowTokenOpt] = useState(false);
+  const [savingTok, setSavingTok] = useState(false);
+  const [tokSuccess, setTokSuccess] = useState('');
+  const [tokError, setTokError] = useState('');
+  const [invalidating, setInvalidating] = useState(false);
+
+  // Meta-analysis tuning state
+  const [metaAnalysis, setMetaAnalysis] = useState<MetaAnalysisConfigResponse | null>(null);
+  const [metaCfg, setMetaCfg] = useState<MetaAnalysisConfig | null>(null);
+  const [showMetaAnalysis, setShowMetaAnalysis] = useState(false);
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [metaSuccess, setMetaSuccess] = useState('');
+  const [metaError, setMetaError] = useState('');
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const [data, prompts, ack] = await Promise.all([
+      const [data, prompts, ack, tok, meta] = await Promise.all([
         fetchAiConfig(),
         fetchAiPrompts(),
         fetchAckConfig(),
+        fetchTokenOptConfig(),
+        fetchMetaAnalysisConfig(),
       ]);
       setConfig(data);
       setModel(data.model);
@@ -69,6 +92,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       setAckConfig(ack);
       setAckMode(ack.mode);
       setAckPrompt(ack.prompt);
+      setTokenOpt(tok);
+      setTokCfg(tok.config);
+      setMetaAnalysis(meta);
+      setMetaCfg(meta.config);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthError(); return; }
@@ -537,6 +564,544 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 This prompt is sent as the <code>system</code> message when a user asks a natural-language question
                 via the Ask Question feature. The user message includes context from recent meta-analysis results.
               </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Token Optimization Configuration ────────────── */}
+      <div className="ai-prompts-section">
+        <h3>Token Optimization</h3>
+        <p className="ai-config-desc">
+          Reduce LLM token usage and API costs without compromising analysis quality.
+          Changes take effect on the next pipeline cycle.
+        </p>
+
+        {tokError && (
+          <div className="error-msg" role="alert">
+            {tokError}
+            <button className="error-dismiss" onClick={() => setTokError('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+        {tokSuccess && (
+          <div className="success-msg" role="status">
+            {tokSuccess}
+            <button className="error-dismiss" onClick={() => setTokSuccess('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowTokenOpt((v) => !v)}
+          >
+            <span className={`prompt-chevron${showTokenOpt ? ' open' : ''}`}>&#9654;</span>
+            Optimization Settings
+            {tokenOpt?.cache_stats && tokenOpt.cache_stats.cached_templates > 0 && (
+              <span className="prompt-custom-badge">{tokenOpt.cache_stats.cached_templates} cached</span>
+            )}
+          </button>
+
+          {showTokenOpt && tokCfg && (
+            <div className="prompt-editor tok-opt-editor">
+              {/* ── Score Cache ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Score Cache by Template</legend>
+                <span className="form-hint">
+                  Reuse LLM scores for recently-scored message templates instead of re-scoring them.
+                  This is the single biggest optimisation — typically saves 50–80% of scoring API calls.
+                </span>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={tokCfg.score_cache_enabled}
+                      onChange={(e) => setTokCfg({ ...tokCfg, score_cache_enabled: e.target.checked })}
+                    />
+                    Enable score caching
+                  </label>
+                </div>
+                {tokCfg.score_cache_enabled && (
+                  <div className="tok-opt-row">
+                    <label>Cache TTL (minutes)</label>
+                    <input
+                      type="number"
+                      min={1} max={10080} step={1}
+                      value={tokCfg.score_cache_ttl_minutes}
+                      onChange={(e) => setTokCfg({ ...tokCfg, score_cache_ttl_minutes: Number(e.target.value) || 60 })}
+                      style={{ width: 90 }}
+                    />
+                    <span className="form-hint">How long (min) to reuse cached scores before re-scoring.</span>
+                  </div>
+                )}
+              </fieldset>
+
+              {/* ── Severity Filter ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Severity Pre-Filter</legend>
+                <span className="form-hint">
+                  Automatically score events at 0 for selected severity levels without calling the LLM.
+                  Useful for noisy systems that produce many debug/info events.
+                </span>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={tokCfg.severity_filter_enabled}
+                      onChange={(e) => setTokCfg({ ...tokCfg, severity_filter_enabled: e.target.checked })}
+                    />
+                    Enable severity filter
+                  </label>
+                </div>
+                {tokCfg.severity_filter_enabled && (
+                  <div className="tok-opt-row">
+                    <label>Skip severity levels</label>
+                    <div className="tok-opt-checkboxes">
+                      {['debug', 'info', 'notice', 'warning'].map((sev) => (
+                        <label key={sev} className="tok-opt-toggle">
+                          <input
+                            type="checkbox"
+                            checked={tokCfg.severity_skip_levels.includes(sev)}
+                            onChange={(e) => {
+                              const levels = e.target.checked
+                                ? [...tokCfg.severity_skip_levels, sev]
+                                : tokCfg.severity_skip_levels.filter((s) => s !== sev);
+                              setTokCfg({ ...tokCfg, severity_skip_levels: levels });
+                            }}
+                          />
+                          {sev}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </fieldset>
+
+              {/* ── Message Truncation ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Message Truncation</legend>
+                <span className="form-hint">
+                  Limit the length of each event message sent to the LLM. Long stack traces and data dumps
+                  waste tokens — the first few hundred characters usually contain the diagnostic information.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Max message length (chars)</label>
+                  <input
+                    type="number"
+                    min={50} max={10000} step={50}
+                    value={tokCfg.message_max_length}
+                    onChange={(e) => setTokCfg({ ...tokCfg, message_max_length: Number(e.target.value) || 512 })}
+                    style={{ width: 90 }}
+                  />
+                </div>
+              </fieldset>
+
+              {/* ── Batch Size ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Scoring Batch Size</legend>
+                <span className="form-hint">
+                  Number of message templates sent per LLM API call. Larger batches reduce overhead
+                  (the system prompt is repeated with every call) but increase latency per call.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Templates per batch</label>
+                  <input
+                    type="number"
+                    min={1} max={100} step={1}
+                    value={tokCfg.scoring_batch_size}
+                    onChange={(e) => setTokCfg({ ...tokCfg, scoring_batch_size: Number(e.target.value) || 20 })}
+                    style={{ width: 90 }}
+                  />
+                </div>
+              </fieldset>
+
+              {/* ── Low-Score Auto-Skip ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Low-Score Auto-Skip (Learned Noise Filter)</legend>
+                <span className="form-hint">
+                  Templates that have been consistently scored near-zero over multiple pipeline runs
+                  are automatically scored at 0 without calling the LLM. This is a "learned noise filter" —
+                  the LLM teaches the system what is noise, reducing costs over time.
+                </span>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={tokCfg.low_score_auto_skip_enabled}
+                      onChange={(e) => setTokCfg({ ...tokCfg, low_score_auto_skip_enabled: e.target.checked })}
+                    />
+                    Enable low-score auto-skip
+                  </label>
+                </div>
+                {tokCfg.low_score_auto_skip_enabled && (
+                  <>
+                    <div className="tok-opt-row">
+                      <label>Score threshold</label>
+                      <input
+                        type="number"
+                        min={0} max={1} step={0.01}
+                        value={tokCfg.low_score_threshold}
+                        onChange={(e) => setTokCfg({ ...tokCfg, low_score_threshold: Number(e.target.value) || 0.05 })}
+                        style={{ width: 90 }}
+                      />
+                      <span className="form-hint">Templates with avg max score below this are auto-skipped.</span>
+                    </div>
+                    <div className="tok-opt-row">
+                      <label>Min scorings before skip</label>
+                      <input
+                        type="number"
+                        min={1} max={100} step={1}
+                        value={tokCfg.low_score_min_scorings}
+                        onChange={(e) => setTokCfg({ ...tokCfg, low_score_min_scorings: Number(e.target.value) || 5 })}
+                        style={{ width: 90 }}
+                      />
+                      <span className="form-hint">Template must be scored at least this many times before auto-skip activates.</span>
+                    </div>
+                  </>
+                )}
+              </fieldset>
+
+              {/* ── Meta-Analysis ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Meta-Analysis Optimization</legend>
+                <span className="form-hint">
+                  Control how many events are sent to the meta-analysis LLM call and whether
+                  high-scoring events are prioritised.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Max events per window</label>
+                  <input
+                    type="number"
+                    min={10} max={2000} step={10}
+                    value={tokCfg.meta_max_events}
+                    onChange={(e) => setTokCfg({ ...tokCfg, meta_max_events: Number(e.target.value) || 200 })}
+                    style={{ width: 90 }}
+                  />
+                </div>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={tokCfg.meta_prioritize_high_scores}
+                      onChange={(e) => setTokCfg({ ...tokCfg, meta_prioritize_high_scores: e.target.checked })}
+                    />
+                    Prioritise high-score events (sort by score desc before cap)
+                  </label>
+                </div>
+              </fieldset>
+
+              {/* ── Actions ── */}
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingTok}
+                  onClick={async () => {
+                    setSavingTok(true);
+                    setTokError('');
+                    setTokSuccess('');
+                    try {
+                      const updated = await updateTokenOptConfig(tokCfg);
+                      setTokenOpt(updated);
+                      setTokCfg(updated.config);
+                      setTokSuccess('Token optimization settings saved. Takes effect on next pipeline run.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setTokError(msg);
+                    } finally {
+                      setSavingTok(false);
+                    }
+                  }}
+                >
+                  {savingTok ? 'Saving...' : 'Save Settings'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingTok || invalidating}
+                  onClick={async () => {
+                    if (!window.confirm('Invalidate all cached template scores? Templates will be re-scored by the LLM on the next pipeline run.')) return;
+                    setInvalidating(true);
+                    setTokError('');
+                    setTokSuccess('');
+                    try {
+                      const res = await invalidateScoreCache();
+                      setTokSuccess(`Score cache cleared: ${res.cleared} templates invalidated.`);
+                      // Refresh stats
+                      const updated = await fetchTokenOptConfig();
+                      setTokenOpt(updated);
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setTokError(msg);
+                    } finally {
+                      setInvalidating(false);
+                    }
+                  }}
+                >
+                  {invalidating ? 'Clearing...' : 'Invalidate Score Cache'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingTok}
+                  onClick={async () => {
+                    if (!window.confirm('Reset all token optimization settings to defaults?')) return;
+                    setSavingTok(true);
+                    setTokError('');
+                    setTokSuccess('');
+                    try {
+                      const updated = await updateTokenOptConfig(tokenOpt?.defaults ?? {});
+                      setTokenOpt(updated);
+                      setTokCfg(updated.config);
+                      setTokSuccess('Settings reset to defaults.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setTokError(msg);
+                    } finally {
+                      setSavingTok(false);
+                    }
+                  }}
+                >
+                  Reset to Defaults
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Meta-Analysis Tuning ─────────────────────────── */}
+      <div className="ai-prompts-section">
+        <h3>Meta-Analysis Tuning</h3>
+        <p className="ai-config-desc">
+          Control how findings are deduplicated, how stale findings are auto-resolved,
+          and how severity decays for persistent non-impactful findings.
+          Inspired by Sentry, PagerDuty, and Datadog alert management.
+        </p>
+
+        {metaError && (
+          <div className="error-msg" role="alert">
+            {metaError}
+            <button className="error-dismiss" onClick={() => setMetaError('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+        {metaSuccess && (
+          <div className="success-msg" role="status">
+            {metaSuccess}
+            <button className="error-dismiss" onClick={() => setMetaSuccess('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowMetaAnalysis((v) => !v)}
+          >
+            <span className={`prompt-chevron${showMetaAnalysis ? ' open' : ''}`}>&#9654;</span>
+            Finding Quality Settings
+            {metaAnalysis?.stats && (
+              <span className="prompt-custom-badge">
+                {metaAnalysis.stats.total_open_findings} open findings
+              </span>
+            )}
+          </button>
+
+          {showMetaAnalysis && metaCfg && (
+            <div className="prompt-editor tok-opt-editor">
+
+              {/* Stats banner */}
+              {metaAnalysis?.stats && metaAnalysis.stats.total_open_findings > 0 && (
+                <div className="meta-stats-banner">
+                  <span>Open: <strong>{metaAnalysis.stats.total_open_findings}</strong></span>
+                  <span>Avg occurrences: <strong>{metaAnalysis.stats.avg_occurrence_count}</strong></span>
+                  <span>Max occurrences: <strong>{metaAnalysis.stats.max_occurrence_count}</strong></span>
+                  <span>Avg misses: <strong>{metaAnalysis.stats.avg_consecutive_misses}</strong></span>
+                </div>
+              )}
+
+              {/* ── Finding Deduplication ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Finding Deduplication</legend>
+                <span className="form-hint">
+                  Uses TF-IDF cosine similarity and Jaccard similarity to detect duplicate findings
+                  after the LLM returns them. Duplicates update existing findings instead of creating new ones.
+                </span>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={metaCfg.finding_dedup_enabled}
+                      onChange={(e) => setMetaCfg({ ...metaCfg, finding_dedup_enabled: e.target.checked })}
+                    />
+                    Enable finding deduplication
+                  </label>
+                </div>
+                {metaCfg.finding_dedup_enabled && (
+                  <div className="tok-opt-row">
+                    <label>Similarity threshold</label>
+                    <input
+                      type="number"
+                      min={0.1} max={1.0} step={0.05}
+                      value={metaCfg.finding_dedup_threshold}
+                      onChange={(e) => setMetaCfg({ ...metaCfg, finding_dedup_threshold: Number(e.target.value) || 0.6 })}
+                      style={{ width: 90 }}
+                    />
+                    <span className="form-hint">
+                      Findings with similarity above this threshold are considered duplicates (0.5 = relaxed, 0.8 = strict).
+                    </span>
+                  </div>
+                )}
+                <div className="tok-opt-row">
+                  <label>Max new findings per window</label>
+                  <input
+                    type="number"
+                    min={1} max={50} step={1}
+                    value={metaCfg.max_new_findings_per_window}
+                    onChange={(e) => setMetaCfg({ ...metaCfg, max_new_findings_per_window: Number(e.target.value) || 5 })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    Hard cap on new findings created per analysis window (safety net).
+                  </span>
+                </div>
+              </fieldset>
+
+              {/* ── Auto-Resolution ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Auto-Resolution of Stale Findings</legend>
+                <span className="form-hint">
+                  Findings not observed for N consecutive analysis windows are automatically resolved.
+                  This models PagerDuty's auto-pause behaviour — if an issue fixes itself, the finding closes.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Auto-resolve after (windows)</label>
+                  <input
+                    type="number"
+                    min={0} max={100} step={1}
+                    value={metaCfg.auto_resolve_after_misses}
+                    onChange={(e) => setMetaCfg({ ...metaCfg, auto_resolve_after_misses: Number(e.target.value) || 0 })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    Set to 0 to disable auto-resolution. Recommended: 3-10 depending on window interval.
+                  </span>
+                </div>
+              </fieldset>
+
+              {/* ── Severity Decay ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Severity Decay</legend>
+                <span className="form-hint">
+                  Findings that keep recurring without causing actual outages have their severity
+                  gradually reduced (critical → high → medium). This models how a human analyst
+                  adjusts urgency over time for persistent benign patterns.
+                </span>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={metaCfg.severity_decay_enabled}
+                      onChange={(e) => setMetaCfg({ ...metaCfg, severity_decay_enabled: e.target.checked })}
+                    />
+                    Enable severity decay
+                  </label>
+                </div>
+                {metaCfg.severity_decay_enabled && (
+                  <div className="tok-opt-row">
+                    <label>Decay after (occurrences)</label>
+                    <input
+                      type="number"
+                      min={1} max={100} step={1}
+                      value={metaCfg.severity_decay_after_occurrences}
+                      onChange={(e) => setMetaCfg({ ...metaCfg, severity_decay_after_occurrences: Number(e.target.value) || 10 })}
+                      style={{ width: 90 }}
+                    />
+                    <span className="form-hint">
+                      After this many occurrences, critical → high, high → medium. Severity never decays below medium.
+                    </span>
+                  </div>
+                )}
+              </fieldset>
+
+              {/* ── Max Open Findings Cap ── */}
+              <fieldset className="tok-opt-group">
+                <legend>Max Open Findings Cap</legend>
+                <span className="form-hint">
+                  Hard limit on open findings per system. If exceeded, the lowest-priority
+                  findings (info, then low, oldest first) are auto-resolved to make room.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Max open findings per system</label>
+                  <input
+                    type="number"
+                    min={5} max={200} step={1}
+                    value={metaCfg.max_open_findings_per_system}
+                    onChange={(e) => setMetaCfg({ ...metaCfg, max_open_findings_per_system: Number(e.target.value) || 25 })}
+                    style={{ width: 90 }}
+                  />
+                </div>
+              </fieldset>
+
+              {/* ── Actions ── */}
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingMeta}
+                  onClick={async () => {
+                    setSavingMeta(true);
+                    setMetaError('');
+                    setMetaSuccess('');
+                    try {
+                      const updated = await updateMetaAnalysisConfig(metaCfg);
+                      setMetaCfg(updated.config);
+                      setMetaSuccess('Meta-analysis settings saved. Takes effect on next pipeline run.');
+                      // Refresh stats
+                      const full = await fetchMetaAnalysisConfig();
+                      setMetaAnalysis(full);
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setMetaError(msg);
+                    } finally {
+                      setSavingMeta(false);
+                    }
+                  }}
+                >
+                  {savingMeta ? 'Saving...' : 'Save Settings'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingMeta}
+                  onClick={async () => {
+                    if (!window.confirm('Reset all meta-analysis settings to defaults?')) return;
+                    setSavingMeta(true);
+                    setMetaError('');
+                    setMetaSuccess('');
+                    try {
+                      const updated = await updateMetaAnalysisConfig(metaAnalysis?.defaults ?? {});
+                      setMetaCfg(updated.config);
+                      setMetaSuccess('Settings reset to defaults.');
+                      const full = await fetchMetaAnalysisConfig();
+                      setMetaAnalysis(full);
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setMetaError(msg);
+                    } finally {
+                      setSavingMeta(false);
+                    }
+                  }}
+                >
+                  Reset to Defaults
+                </button>
+              </div>
             </div>
           )}
         </div>

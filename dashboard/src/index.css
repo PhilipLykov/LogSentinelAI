@@ -688,6 +688,56 @@ input:focus-visible,
   color: var(--text-muted);
 }
 
+/* Occurrence badge */
+.finding-occurrence-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--primary);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-right: 6px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Severity decay indicator */
+.finding-severity-decay {
+  margin-right: 3px;
+  font-weight: 400;
+  opacity: 0.7;
+}
+.finding-severity-decay s {
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+/* Last-seen timestamp */
+.finding-last-seen {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+/* Meta-analysis stats banner */
+.meta-stats-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: 0.82rem;
+  margin-bottom: 12px;
+}
+.meta-stats-banner span {
+  white-space: nowrap;
+}
+.meta-stats-banner strong {
+  color: var(--primary);
+}
+
 /* ── Responsive table ──────────────────────────────────── */
 
 .table-responsive {
@@ -1951,6 +2001,101 @@ input:focus-visible,
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 0.78rem;
+}
+
+/* ── Token Optimization section ────────────────────────── */
+
+.tok-opt-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tok-opt-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 0;
+}
+
+.tok-opt-group legend {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text);
+  padding: 0 6px;
+}
+
+.tok-opt-group > .form-hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-bottom: 10px;
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+.tok-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.tok-opt-row > label:not(.tok-opt-toggle) {
+  min-width: 170px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.tok-opt-row input[type="number"] {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.tok-opt-row .form-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.tok-opt-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tok-opt-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.tok-opt-checkboxes {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 600px) {
+  .tok-opt-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .tok-opt-row > label:not(.tok-opt-toggle) {
+    min-width: auto;
+  }
 }
 
 /* ── Notifications section ─────────────────────────────── */

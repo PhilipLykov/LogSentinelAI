@@ -129,6 +129,11 @@ export interface Finding {
   resolved_at: string | null;
   resolved_by_meta_id: string | null;
   created_at: string;
+  // Lifecycle fields (from migration 015)
+  last_seen_at: string | null;
+  occurrence_count: number;
+  original_severity: string | null;
+  consecutive_misses: number;
 }
 
 export async function fetchFindings(
@@ -731,6 +736,83 @@ export async function updateAckConfig(data: {
   prompt?: string;
 }): Promise<AckConfigResponse> {
   return apiFetch('/api/v1/events/ack-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Token Optimization ──────────────────────────────────────
+
+export interface TokenOptimizationConfig {
+  score_cache_enabled: boolean;
+  score_cache_ttl_minutes: number;
+  severity_filter_enabled: boolean;
+  severity_skip_levels: string[];
+  severity_default_score: number;
+  message_max_length: number;
+  scoring_batch_size: number;
+  low_score_auto_skip_enabled: boolean;
+  low_score_threshold: number;
+  low_score_min_scorings: number;
+  meta_max_events: number;
+  meta_prioritize_high_scores: boolean;
+}
+
+export interface TokenOptResponse {
+  config: TokenOptimizationConfig;
+  defaults: TokenOptimizationConfig;
+  cache_stats?: {
+    cached_templates: number;
+    average_score: number | null;
+  };
+}
+
+export async function fetchTokenOptConfig(): Promise<TokenOptResponse> {
+  return apiFetch('/api/v1/token-optimization');
+}
+
+export async function updateTokenOptConfig(data: Partial<TokenOptimizationConfig>): Promise<TokenOptResponse> {
+  return apiFetch('/api/v1/token-optimization', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function invalidateScoreCache(): Promise<{ cleared: number }> {
+  return apiFetch('/api/v1/token-optimization/invalidate-cache', {
+    method: 'POST',
+  });
+}
+
+// ── Meta-Analysis Config ────────────────────────────────────
+
+export interface MetaAnalysisConfig {
+  finding_dedup_enabled: boolean;
+  finding_dedup_threshold: number;
+  max_new_findings_per_window: number;
+  auto_resolve_after_misses: number;
+  severity_decay_enabled: boolean;
+  severity_decay_after_occurrences: number;
+  max_open_findings_per_system: number;
+}
+
+export interface MetaAnalysisConfigResponse {
+  config: MetaAnalysisConfig;
+  defaults: MetaAnalysisConfig;
+  stats: {
+    total_open_findings: number;
+    avg_occurrence_count: number;
+    max_occurrence_count: number;
+    avg_consecutive_misses: number;
+  };
+}
+
+export async function fetchMetaAnalysisConfig(): Promise<MetaAnalysisConfigResponse> {
+  return apiFetch('/api/v1/meta-analysis-config');
+}
+
+export async function updateMetaAnalysisConfig(data: Partial<MetaAnalysisConfig>): Promise<{ config: MetaAnalysisConfig; defaults: MetaAnalysisConfig }> {
+  return apiFetch('/api/v1/meta-analysis-config', {
     method: 'PUT',
     body: JSON.stringify(data),
   });

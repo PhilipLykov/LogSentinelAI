@@ -9,20 +9,78 @@ import {
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
 import { resolveCustomPrompts } from '../llm/aiConfig.js';
+import { loadTokenOptConfig } from './scoringJob.js';
+import {
+  deduplicateFindings,
+  computeFingerprint,
+  isHigherSeverity,
+  type OpenFinding,
+} from './findingDedup.js';
 
 const DEFAULT_W_META = 0.7;
 /** Number of previous window summaries to include as context. */
 const CONTEXT_WINDOW_SIZE = 5;
 
+// ── Meta-analysis configuration defaults ───────────────────────
+
+export interface MetaAnalysisConfig {
+  finding_dedup_enabled: boolean;
+  finding_dedup_threshold: number;
+  max_new_findings_per_window: number;
+  auto_resolve_after_misses: number;
+  severity_decay_enabled: boolean;
+  severity_decay_after_occurrences: number;
+  max_open_findings_per_system: number;
+}
+
+const META_CONFIG_DEFAULTS: MetaAnalysisConfig = {
+  finding_dedup_enabled: true,
+  finding_dedup_threshold: 0.6,
+  max_new_findings_per_window: 5,
+  auto_resolve_after_misses: 5,
+  severity_decay_enabled: true,
+  severity_decay_after_occurrences: 10,
+  max_open_findings_per_system: 25,
+};
+
+/** Load meta-analysis config from app_config, with defaults. */
+export async function loadMetaAnalysisConfig(db: Knex): Promise<MetaAnalysisConfig> {
+  try {
+    const row = await db('app_config').where({ key: 'meta_analysis_config' }).first();
+    if (row) {
+      let parsed = row.value;
+      if (typeof parsed === 'string') {
+        parsed = JSON.parse(parsed);
+      }
+      return { ...META_CONFIG_DEFAULTS, ...(parsed as Partial<MetaAnalysisConfig>) };
+    }
+  } catch (err) {
+    console.error(`[${localTimestamp()}] Failed to load meta_analysis_config:`, err);
+  }
+  return { ...META_CONFIG_DEFAULTS };
+}
+
+// ── Severity decay helpers ─────────────────────────────────────
+
+const SEVERITY_DECAY_MAP: Record<string, string> = {
+  critical: 'high',
+  high: 'medium',
+  // medium and below: no decay
+};
+
+function decaySeverity(severity: string): string | null {
+  return SEVERITY_DECAY_MAP[severity] ?? null;
+}
+
 /**
  * Meta-analyze a window: gather events + scores, build historical context,
  * call LLM, store meta_results + findings, compute effective scores.
  *
- * The "sliding context window" approach:
- *   - Last N window summaries are included so the LLM can spot trends.
- *   - Currently open (unacknowledged, unresolved) findings are sent so the
- *     LLM can decide which are still relevant and which should be resolved.
- *   - New findings are persisted individually in the `findings` table.
+ * Enhanced with:
+ *   - TF-IDF cosine / Jaccard finding deduplication (post-LLM safety net)
+ *   - Auto-resolution of stale findings (consecutive_misses)
+ *   - Severity decay for persistent non-escalating findings
+ *   - Max open findings cap with priority eviction
  */
 export async function metaAnalyzeWindow(
   db: Knex,
@@ -43,6 +101,14 @@ export async function metaAnalyzeWindow(
 
   // Resolve custom system prompt (if configured by user)
   const customPrompts = await resolveCustomPrompts(db);
+
+  // ── Resolve token optimisation config ───────────────────
+  const tokenOpt = await loadTokenOptConfig(db);
+  const metaMaxEvents = Math.max(10, Math.min(tokenOpt.meta_max_events, 2000));
+  const prioritizeHighScores = tokenOpt.meta_prioritize_high_scores;
+
+  // ── Resolve meta-analysis config ────────────────────────
+  const metaCfg = await loadMetaAnalysisConfig(db);
 
   // ── Resolve event ack config ────────────────────────────
   const ackRows = await db('app_config')
@@ -66,7 +132,7 @@ export async function metaAnalyzeWindow(
     .where('timestamp', '<', window.to_ts)
     .select('id', 'message', 'severity', 'template_id', 'acknowledged_at')
     .orderBy('timestamp', 'asc')
-    .limit(200); // Cap for LLM context
+    .limit(metaMaxEvents); // Configurable cap for LLM context
 
   // In "skip" mode, exclude acknowledged events entirely
   if (ackMode === 'skip') {
@@ -102,7 +168,7 @@ export async function metaAnalyzeWindow(
     }
     const criterion = CRITERIA.find((c) => c.id === Number(row.criterion_id));
     if (criterion) {
-      (scoreMap.get(row.event_id)! as any)[criterion.slug] = Number(row.score);
+      (scoreMap.get(row.event_id)! as any)[criterion.slug] = Number(row.score) || 0;
     }
   }
 
@@ -125,7 +191,7 @@ export async function metaAnalyzeWindow(
     templateGroups.get(key)!.count++;
   }
 
-  const eventsForLlm = Array.from(templateGroups.values()).map((g) => {
+  let eventsForLlm = Array.from(templateGroups.values()).map((g) => {
     // In context_only mode, annotate acknowledged events with the ack prompt
     if (g.acknowledged && ackMode === 'context_only') {
       return {
@@ -143,6 +209,23 @@ export async function metaAnalyzeWindow(
     };
   });
 
+  // ── High-score prioritisation ─────────────────────────────
+  // Sort by max score descending so the most important events are always
+  // included even when the template count exceeds the cap.
+  if (prioritizeHighScores && eventsForLlm.length > 1) {
+    eventsForLlm = eventsForLlm.sort((a, b) => {
+      const safeMax = (s: typeof a.scores) => {
+        if (!s) return 0;
+        return Math.max(
+          Number(s.it_security) || 0, Number(s.performance_degradation) || 0,
+          Number(s.failure_prediction) || 0, Number(s.anomaly) || 0,
+          Number(s.compliance_audit) || 0, Number(s.operational_risk) || 0,
+        );
+      };
+      return safeMax(b.scores) - safeMax(a.scores); // descending
+    });
+  }
+
   // ── Build historical context (sliding window) ───────────
   const context = await buildMetaContext(db, system.id, windowId);
 
@@ -154,6 +237,38 @@ export async function metaAnalyzeWindow(
     context,
     { systemPrompt: customPrompts.metaSystemPrompt },
   );
+
+  // ── Finding deduplication (post-LLM safety net) ─────────
+  // Build OpenFinding[] from context for dedup module
+  const openFindingsForDedup: OpenFinding[] = context.openFindings.map((f: any) => ({
+    id: f._dbId,
+    text: f.text,
+    severity: f.severity,
+    criterion_slug: f.criterion ?? null,
+    fingerprint: f._fingerprint ?? null,
+    occurrence_count: f._occurrence_count ?? 1,
+    consecutive_misses: f._consecutive_misses ?? 0,
+  }));
+
+  let findingsToInsert = result.findings;
+  let findingsToUpdate: Awaited<ReturnType<typeof deduplicateFindings>>['toUpdate'] = [];
+
+  if (metaCfg.finding_dedup_enabled && result.findings.length > 0) {
+    const dedupResult = deduplicateFindings(
+      result.findings,
+      openFindingsForDedup,
+      metaCfg.finding_dedup_threshold,
+      metaCfg.max_new_findings_per_window,
+    );
+    findingsToInsert = dedupResult.toInsert;
+    findingsToUpdate = dedupResult.toUpdate;
+  } else if (result.findings.length > metaCfg.max_new_findings_per_window) {
+    // Even without dedup, apply the hard cap
+    findingsToInsert = result.findings.slice(0, metaCfg.max_new_findings_per_window);
+  }
+
+  // Track which open findings were matched (seen in this window)
+  const matchedOpenIds = new Set(findingsToUpdate.map((u) => u.id));
 
   // ── Persist everything in a transaction ─────────────────
   await db.transaction(async (trx) => {
@@ -169,8 +284,9 @@ export async function metaAnalyzeWindow(
       key_event_ids: result.key_event_ids ? JSON.stringify(result.key_event_ids) : null,
     });
 
-    // ── Persist structured findings ─────────────────────
-    for (const finding of result.findings) {
+    // ── Persist NEW findings (after dedup) ────────────────
+    const nowIso = new Date().toISOString();
+    for (const finding of findingsToInsert) {
       await trx('findings').insert({
         id: uuidv4(),
         system_id: system.id,
@@ -179,16 +295,37 @@ export async function metaAnalyzeWindow(
         severity: finding.severity,
         criterion_slug: finding.criterion ?? null,
         status: 'open',
+        fingerprint: computeFingerprint(finding.text),
+        last_seen_at: nowIso,
+        occurrence_count: 1,
+        consecutive_misses: 0,
+        original_severity: finding.severity,
       });
     }
 
-    // ── Mark resolved findings ──────────────────────────
+    // ── Update existing findings matched by dedup ─────────
+    for (const update of findingsToUpdate) {
+      const updateFields: Record<string, any> = {
+        last_seen_at: update.newLastSeenAt,
+        consecutive_misses: 0, // Reset misses on match
+      };
+      if (update.incrementOccurrence) {
+        updateFields.occurrence_count = trx.raw('occurrence_count + 1');
+      }
+      if (update.escalateSeverity) {
+        updateFields.severity = update.escalateSeverity;
+      }
+      await trx('findings')
+        .where({ id: update.id, status: 'open' })
+        .update(updateFields);
+    }
+
+    // ── Mark LLM-resolved findings ────────────────────────
     if (result.resolvedFindingIndices.length > 0 && context.openFindings.length > 0) {
       const resolvedNow = new Date().toISOString();
       for (const idx of result.resolvedFindingIndices) {
         const openFinding = context.openFindings.find((f) => f.index === idx);
         if (!openFinding) continue;
-        // The _dbId was stored when we built the context
         const dbId = (openFinding as any)._dbId;
         if (!dbId) continue;
         await trx('findings')
@@ -201,8 +338,121 @@ export async function metaAnalyzeWindow(
       }
     }
 
+    // ── Increment consecutive_misses for unmatched findings ─
+    // Open findings that were NOT matched by any new finding AND
+    // NOT resolved by the LLM in this window have "missed" a window.
+    const resolvedIds = new Set<string>();
+    if (result.resolvedFindingIndices.length > 0 && context.openFindings.length > 0) {
+      for (const idx of result.resolvedFindingIndices) {
+        const of = context.openFindings.find((f) => f.index === idx);
+        if (of) resolvedIds.add((of as any)._dbId);
+      }
+    }
+    const unmatchedOpenIds: string[] = [];
+    for (const of of context.openFindings) {
+      const dbId = (of as any)._dbId;
+      if (dbId && !matchedOpenIds.has(dbId) && !resolvedIds.has(dbId)) {
+        unmatchedOpenIds.push(dbId);
+      }
+    }
+    if (unmatchedOpenIds.length > 0) {
+      await trx('findings')
+        .whereIn('id', unmatchedOpenIds)
+        .where({ status: 'open' })
+        .update({
+          consecutive_misses: trx.raw('consecutive_misses + 1'),
+        });
+    }
+
+    // ── Auto-resolve stale findings ───────────────────────
+    if (metaCfg.auto_resolve_after_misses > 0) {
+      const staleFindings = await trx('findings')
+        .where({ system_id: system.id, status: 'open' })
+        .where('consecutive_misses', '>=', metaCfg.auto_resolve_after_misses)
+        .select('id');
+      if (staleFindings.length > 0) {
+        const staleIds = staleFindings.map((f: any) => f.id);
+        await trx('findings')
+          .whereIn('id', staleIds)
+          .update({
+            status: 'resolved',
+            resolved_at: nowIso,
+            resolved_by_meta_id: metaId,
+          });
+        console.log(
+          `[${localTimestamp()}] Auto-resolved ${staleIds.length} stale finding(s) ` +
+          `(>= ${metaCfg.auto_resolve_after_misses} consecutive misses)`,
+        );
+      }
+    }
+
+    // ── Severity decay for persistent non-escalating findings ──
+    if (metaCfg.severity_decay_enabled && metaCfg.severity_decay_after_occurrences > 0) {
+      const decayCandidates = await trx('findings')
+        .where({ system_id: system.id, status: 'open' })
+        .where('occurrence_count', '>=', metaCfg.severity_decay_after_occurrences)
+        .whereIn('severity', ['critical', 'high'])
+        .select('id', 'severity', 'original_severity');
+
+      for (const f of decayCandidates) {
+        const decayed = decaySeverity(f.severity);
+        if (decayed) {
+          await trx('findings')
+            .where({ id: f.id })
+            .update({ severity: decayed });
+          console.log(
+            `[${localTimestamp()}] Severity decay: finding ${f.id} ` +
+            `${f.severity} → ${decayed} (occurrence_count >= ${metaCfg.severity_decay_after_occurrences})`,
+          );
+        }
+      }
+    }
+
+    // ── Max open findings cap with priority eviction ──────
+    if (metaCfg.max_open_findings_per_system > 0) {
+      const openCount = await trx('findings')
+        .where({ system_id: system.id, status: 'open' })
+        .count('id as cnt')
+        .first();
+      const totalOpen = Number((openCount as any)?.cnt ?? 0);
+      const excess = totalOpen - metaCfg.max_open_findings_per_system;
+
+      if (excess > 0) {
+        // Evict lowest-priority: info first, then low, then medium; oldest first within each
+        const toEvict = await trx('findings')
+          .where({ system_id: system.id, status: 'open' })
+          .orderByRaw(`
+            CASE severity
+              WHEN 'info' THEN 0
+              WHEN 'low' THEN 1
+              WHEN 'medium' THEN 2
+              WHEN 'high' THEN 3
+              WHEN 'critical' THEN 4
+              ELSE 2
+            END ASC,
+            last_seen_at ASC NULLS FIRST
+          `)
+          .limit(excess)
+          .select('id');
+
+        if (toEvict.length > 0) {
+          const evictIds = toEvict.map((f: any) => f.id);
+          await trx('findings')
+            .whereIn('id', evictIds)
+            .update({
+              status: 'resolved',
+              resolved_at: nowIso,
+              resolved_by_meta_id: metaId,
+            });
+          console.log(
+            `[${localTimestamp()}] Evicted ${evictIds.length} finding(s) ` +
+            `(exceeded max_open_findings_per_system=${metaCfg.max_open_findings_per_system})`,
+          );
+        }
+      }
+    }
+
     // ── Compute effective scores per criterion ──────────
-    const now = new Date().toISOString();
     for (const criterion of CRITERIA) {
       const metaScore = (result.meta_scores as any)[criterion.slug] ?? 0;
 
@@ -223,7 +473,7 @@ export async function metaAnalyzeWindow(
                       meta_score = EXCLUDED.meta_score,
                       max_event_score = EXCLUDED.max_event_score,
                       updated_at = EXCLUDED.updated_at
-      `, [windowId, system.id, criterion.id, effectiveValue, metaScore, maxEventScore, now]);
+      `, [windowId, system.id, criterion.id, effectiveValue, metaScore, maxEventScore, nowIso]);
     }
 
     // ── Track LLM usage ─────────────────────────────────
@@ -244,7 +494,9 @@ export async function metaAnalyzeWindow(
   console.log(
     `[${localTimestamp()}] Meta-analyze window ${windowId}: ` +
     `${events.length} events, ${eventsForLlm.length} templates, ` +
-    `${result.findings.length} new findings, ${result.resolvedFindingIndices.length} resolved, ` +
+    `LLM returned ${result.findings.length} findings → ` +
+    `${findingsToInsert.length} new, ${findingsToUpdate.length} dedup-merged, ` +
+    `${result.resolvedFindingIndices.length} LLM-resolved, ` +
     `tokens=${usage.token_input + usage.token_output}`,
   );
 }
@@ -258,7 +510,12 @@ async function buildMetaContext(
   db: Knex,
   systemId: string,
   currentWindowId: string,
-): Promise<MetaAnalysisContext & { openFindings: Array<{ index: number; text: string; severity: string; criterion?: string; _dbId: string }> }> {
+): Promise<MetaAnalysisContext & {
+  openFindings: Array<{
+    index: number; text: string; severity: string; criterion?: string;
+    _dbId: string; _fingerprint?: string; _occurrence_count: number; _consecutive_misses: number;
+  }>;
+}> {
   // 1. Previous window summaries (last N, excluding the current window)
   const prevMetas = await db('meta_results')
     .join('windows', 'meta_results.window_id', 'windows.id')
@@ -278,7 +535,8 @@ async function buildMetaContext(
     .where({ system_id: systemId, status: 'open' })
     .orderBy('created_at', 'desc')
     .limit(30) // Cap to avoid huge prompts
-    .select('id', 'text', 'severity', 'criterion_slug');
+    .select('id', 'text', 'severity', 'criterion_slug', 'fingerprint',
+            'occurrence_count', 'consecutive_misses');
 
   const openFindings = openRows.map((f: any, i: number) => ({
     index: i,
@@ -286,6 +544,9 @@ async function buildMetaContext(
     severity: f.severity,
     criterion: f.criterion_slug ?? undefined,
     _dbId: f.id, // internal: used to resolve by DB ID later
+    _fingerprint: f.fingerprint ?? undefined,
+    _occurrence_count: Number(f.occurrence_count) || 1,
+    _consecutive_misses: Number(f.consecutive_misses) || 0,
   }));
 
   return { previousSummaries, openFindings };

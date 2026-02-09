@@ -456,52 +456,77 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
 
           {displayedFindings.length > 0 && (
             <div className="findings-list-new">
-              {displayedFindings.map((f) => (
-                <div key={f.id} className={`finding-card finding-status-${f.status}`}>
-                  <div className="finding-card-top">
-                    <span className={`finding-severity finding-severity-${f.severity}`}>
-                      {f.severity}
-                    </span>
-                    {f.criterion_slug && (
-                      <span className="finding-criterion">
-                        {CRITERIA_LABELS[f.criterion_slug] ?? f.criterion_slug}
+              {displayedFindings.map((f) => {
+                const occurrences = Number(f.occurrence_count) || 1;
+                const hasDecay = f.original_severity && f.original_severity !== f.severity;
+                const showLastSeen = occurrences > 1 && f.last_seen_at;
+                return (
+                  <div key={f.id} className={`finding-card finding-status-${f.status}`}>
+                    <div className="finding-card-top">
+                      <span className={`finding-severity finding-severity-${f.severity}`}>
+                        {hasDecay && (
+                          <span className="finding-severity-decay" title={`Originally ${f.original_severity}, decayed due to ${occurrences} occurrences`}>
+                            <s>{f.original_severity}</s>&rarr;
+                          </span>
+                        )}
+                        {f.severity}
                       </span>
-                    )}
-                    <span className="finding-time">{safeDate(f.created_at)}</span>
-                  </div>
-                  <p className="finding-text">{f.text}</p>
-                  <div className="finding-card-actions">
-                    {f.status === 'open' && (
-                      <button
-                        className="btn btn-xs btn-ack"
-                        onClick={() => handleAcknowledge(f.id)}
-                        disabled={ackingId === f.id}
-                      >
-                        {ackingId === f.id ? 'Acknowledging…' : '✓ Acknowledge'}
-                      </button>
-                    )}
-                    {f.status === 'acknowledged' && (
-                      <>
-                        <span className="finding-acked-info">
-                          Ack&apos;d {f.acknowledged_at ? safeDate(f.acknowledged_at) : ''}
+                      {occurrences > 1 && (
+                        <span
+                          className="finding-occurrence-badge"
+                          title={`Detected ${occurrences} times across analysis windows`}
+                        >
+                          &times;{occurrences}
                         </span>
+                      )}
+                      {f.criterion_slug && (
+                        <span className="finding-criterion">
+                          {CRITERIA_LABELS[f.criterion_slug] ?? f.criterion_slug}
+                        </span>
+                      )}
+                      <span className="finding-time">
+                        {safeDate(f.created_at)}
+                        {showLastSeen && (
+                          <span className="finding-last-seen" title="Last seen at">
+                            {' '}| last: {safeDate(f.last_seen_at!)}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <p className="finding-text">{f.text}</p>
+                    <div className="finding-card-actions">
+                      {f.status === 'open' && (
                         <button
-                          className="btn btn-xs btn-outline"
-                          onClick={() => handleReopen(f.id)}
+                          className="btn btn-xs btn-ack"
+                          onClick={() => handleAcknowledge(f.id)}
                           disabled={ackingId === f.id}
                         >
-                          Reopen
+                          {ackingId === f.id ? 'Acknowledging…' : '✓ Acknowledge'}
                         </button>
-                      </>
-                    )}
-                    {f.status === 'resolved' && f.resolved_at && (
-                      <span className="finding-resolved-info">
-                        Resolved by AI {safeDate(f.resolved_at)}
-                      </span>
-                    )}
+                      )}
+                      {f.status === 'acknowledged' && (
+                        <>
+                          <span className="finding-acked-info">
+                            Ack&apos;d {f.acknowledged_at ? safeDate(f.acknowledged_at) : ''}
+                          </span>
+                          <button
+                            className="btn btn-xs btn-outline"
+                            onClick={() => handleReopen(f.id)}
+                            disabled={ackingId === f.id}
+                          >
+                            Reopen
+                          </button>
+                        </>
+                      )}
+                      {f.status === 'resolved' && f.resolved_at && (
+                        <span className="finding-resolved-info">
+                          Resolved by AI {safeDate(f.resolved_at)}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -459,4 +459,291 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       return reply.send({ totals, daily });
     },
   );
+
+  // ── Token Optimisation config ────────────────────────────
+
+  const TOKEN_OPT_DEFAULTS = {
+    score_cache_enabled: true,
+    score_cache_ttl_minutes: 60,
+    severity_filter_enabled: false,
+    severity_skip_levels: ['debug'],
+    severity_default_score: 0,
+    message_max_length: 512,
+    scoring_batch_size: 20,
+    low_score_auto_skip_enabled: false,
+    low_score_threshold: 0.05,
+    low_score_min_scorings: 5,
+    meta_max_events: 200,
+    meta_prioritize_high_scores: true,
+  };
+
+  /** GET /api/v1/token-optimization — return current config with defaults. */
+  app.get(
+    '/api/v1/token-optimization',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        const row = await db('app_config').where({ key: 'token_optimization' }).first('value');
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+          if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
+        }
+        // Merge with defaults to fill any missing keys
+        const config = { ...TOKEN_OPT_DEFAULTS, ...parsed };
+
+        // Also return cache stats
+        const stats = await db('message_templates')
+          .whereNotNull('last_scored_at')
+          .count('id as cached_templates')
+          .avg('avg_max_score as average_score')
+          .first();
+
+        return reply.send({
+          config,
+          defaults: TOKEN_OPT_DEFAULTS,
+          cache_stats: {
+            cached_templates: Number(stats?.cached_templates ?? 0),
+            average_score: stats?.average_score != null ? Number(Number(stats.average_score).toFixed(4)) : null,
+          },
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch token-optimization config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/token-optimization — update config with validation. */
+  app.put(
+    '/api/v1/token-optimization',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      // Validate individual fields
+      if (body.score_cache_ttl_minutes !== undefined) {
+        const v = Number(body.score_cache_ttl_minutes);
+        if (!Number.isFinite(v) || v < 1 || v > 10080) {
+          return reply.code(400).send({ error: 'score_cache_ttl_minutes must be 1–10080.' });
+        }
+      }
+      if (body.message_max_length !== undefined) {
+        const v = Number(body.message_max_length);
+        if (!Number.isFinite(v) || v < 50 || v > 10000) {
+          return reply.code(400).send({ error: 'message_max_length must be 50–10000.' });
+        }
+      }
+      if (body.scoring_batch_size !== undefined) {
+        const v = Number(body.scoring_batch_size);
+        if (!Number.isFinite(v) || v < 1 || v > 100) {
+          return reply.code(400).send({ error: 'scoring_batch_size must be 1–100.' });
+        }
+      }
+      if (body.low_score_threshold !== undefined) {
+        const v = Number(body.low_score_threshold);
+        if (!Number.isFinite(v) || v < 0 || v > 1) {
+          return reply.code(400).send({ error: 'low_score_threshold must be 0–1.' });
+        }
+      }
+      if (body.low_score_min_scorings !== undefined) {
+        const v = Number(body.low_score_min_scorings);
+        if (!Number.isFinite(v) || v < 1 || v > 100) {
+          return reply.code(400).send({ error: 'low_score_min_scorings must be 1–100.' });
+        }
+      }
+      if (body.meta_max_events !== undefined) {
+        const v = Number(body.meta_max_events);
+        if (!Number.isFinite(v) || v < 10 || v > 2000) {
+          return reply.code(400).send({ error: 'meta_max_events must be 10–2000.' });
+        }
+      }
+      if (body.severity_skip_levels !== undefined) {
+        if (!Array.isArray(body.severity_skip_levels)) {
+          return reply.code(400).send({ error: 'severity_skip_levels must be an array.' });
+        }
+        if (body.severity_skip_levels.some((s: unknown) => typeof s !== 'string')) {
+          return reply.code(400).send({ error: 'severity_skip_levels must contain only strings.' });
+        }
+      }
+
+      try {
+        // Load existing config, merge with new values
+        const existing = await db('app_config').where({ key: 'token_optimization' }).first('value');
+        let current: Record<string, unknown> = { ...TOKEN_OPT_DEFAULTS };
+        if (existing) {
+          const raw = typeof existing.value === 'string' ? JSON.parse(existing.value) : existing.value;
+          if (raw && typeof raw === 'object') current = { ...current, ...(raw as Record<string, unknown>) };
+        }
+
+        // Only merge known keys
+        const allowedKeys = Object.keys(TOKEN_OPT_DEFAULTS);
+        for (const key of allowedKeys) {
+          if (body[key] !== undefined) {
+            current[key] = body[key];
+          }
+        }
+
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES ('token_optimization', ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, [JSON.stringify(current)]);
+
+        app.log.info(`[${localTimestamp()}] Token optimization config updated`);
+
+        return reply.send({ config: current, defaults: TOKEN_OPT_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update token-optimization config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
+
+  /** POST /api/v1/token-optimization/invalidate-cache — clear all template score caches. */
+  app.post(
+    '/api/v1/token-optimization/invalidate-cache',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        const result = await db('message_templates')
+          .whereNotNull('last_scored_at')
+          .update({
+            last_scored_at: null,
+            cached_scores: null,
+          });
+        app.log.info(`[${localTimestamp()}] Score cache invalidated: ${result} templates cleared`);
+        return reply.send({ cleared: result });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to invalidate score cache: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to invalidate cache.' });
+      }
+    },
+  );
+
+  // ── Meta-Analysis Config (finding dedup, auto-resolve, severity decay) ──
+
+  const META_CONFIG_DEFAULTS = {
+    finding_dedup_enabled: true,
+    finding_dedup_threshold: 0.6,
+    max_new_findings_per_window: 5,
+    auto_resolve_after_misses: 5,
+    severity_decay_enabled: true,
+    severity_decay_after_occurrences: 10,
+    max_open_findings_per_system: 25,
+  };
+
+  /** GET /api/v1/meta-analysis-config — return current config with defaults and stats. */
+  app.get(
+    '/api/v1/meta-analysis-config',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        const row = await db('app_config').where({ key: 'meta_analysis_config' }).first('value');
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+          if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
+        }
+        const config = { ...META_CONFIG_DEFAULTS, ...parsed };
+
+        // Gather stats about current findings
+        const findingsStats = await db('findings')
+          .where({ status: 'open' })
+          .select(
+            db.raw('COUNT(*) as total_open'),
+            db.raw('AVG(occurrence_count) as avg_occurrence_count'),
+            db.raw('MAX(occurrence_count) as max_occurrence_count'),
+            db.raw('AVG(consecutive_misses) as avg_consecutive_misses'),
+          )
+          .first();
+
+        return reply.send({
+          config,
+          defaults: META_CONFIG_DEFAULTS,
+          stats: {
+            total_open_findings: Number(findingsStats?.total_open ?? 0),
+            avg_occurrence_count: findingsStats?.avg_occurrence_count != null
+              ? Number(Number(findingsStats.avg_occurrence_count).toFixed(1)) : 0,
+            max_occurrence_count: Number(findingsStats?.max_occurrence_count ?? 0),
+            avg_consecutive_misses: findingsStats?.avg_consecutive_misses != null
+              ? Number(Number(findingsStats.avg_consecutive_misses).toFixed(1)) : 0,
+          },
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch meta-analysis config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/meta-analysis-config — update config with validation. */
+  app.put(
+    '/api/v1/meta-analysis-config',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      // Validate individual fields
+      if (body.finding_dedup_threshold !== undefined) {
+        const v = Number(body.finding_dedup_threshold);
+        if (!Number.isFinite(v) || v < 0.1 || v > 1.0) {
+          return reply.code(400).send({ error: 'finding_dedup_threshold must be 0.1–1.0.' });
+        }
+      }
+      if (body.max_new_findings_per_window !== undefined) {
+        const v = Number(body.max_new_findings_per_window);
+        if (!Number.isFinite(v) || v < 1 || v > 50) {
+          return reply.code(400).send({ error: 'max_new_findings_per_window must be 1–50.' });
+        }
+      }
+      if (body.auto_resolve_after_misses !== undefined) {
+        const v = Number(body.auto_resolve_after_misses);
+        if (!Number.isFinite(v) || v < 0 || v > 100) {
+          return reply.code(400).send({ error: 'auto_resolve_after_misses must be 0–100 (0 = disabled).' });
+        }
+      }
+      if (body.severity_decay_after_occurrences !== undefined) {
+        const v = Number(body.severity_decay_after_occurrences);
+        if (!Number.isFinite(v) || v < 1 || v > 100) {
+          return reply.code(400).send({ error: 'severity_decay_after_occurrences must be 1–100.' });
+        }
+      }
+      if (body.max_open_findings_per_system !== undefined) {
+        const v = Number(body.max_open_findings_per_system);
+        if (!Number.isFinite(v) || v < 5 || v > 200) {
+          return reply.code(400).send({ error: 'max_open_findings_per_system must be 5–200.' });
+        }
+      }
+
+      try {
+        // Load existing config, merge with new values
+        const existing = await db('app_config').where({ key: 'meta_analysis_config' }).first('value');
+        let current: Record<string, unknown> = { ...META_CONFIG_DEFAULTS };
+        if (existing) {
+          const raw = typeof existing.value === 'string' ? JSON.parse(existing.value) : existing.value;
+          if (raw && typeof raw === 'object') current = { ...current, ...(raw as Record<string, unknown>) };
+        }
+
+        // Only merge known keys
+        const allowedKeys = Object.keys(META_CONFIG_DEFAULTS);
+        for (const key of allowedKeys) {
+          if (body[key] !== undefined) {
+            current[key] = body[key];
+          }
+        }
+
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES ('meta_analysis_config', ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, [JSON.stringify(current)]);
+
+        app.log.info(`[${localTimestamp()}] Meta-analysis config updated`);
+
+        return reply.send({ config: current, defaults: META_CONFIG_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update meta-analysis config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
 }
