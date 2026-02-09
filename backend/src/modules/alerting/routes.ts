@@ -112,9 +112,11 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       }
       const payload: AlertPayload = {
         title: 'Test Notification — SyslogCollectorAI',
-        body: `This is a test notification sent at ${localTimestamp()}. If you see this, the channel is configured correctly.`,
-        severity: 'info',
+        body: `This is a test notification sent at ${localTimestamp()}. If you see this message, the notification channel "${channel.name}" is configured correctly and working.`,
+        severity: 'medium',
         variant: 'firing',
+        system_name: 'Test System',
+        criterion: 'IT Security',
       };
 
       try {

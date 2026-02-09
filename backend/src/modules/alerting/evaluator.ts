@@ -103,9 +103,12 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
         const criterion = CRITERIA.find((c) => c.id === Number(pair.criterion_id));
         const severity = scoreSeverity(pair.effective_value);
 
+        const scorePct = (pair.effective_value * 100).toFixed(0);
+        const thresholdPct = (triggerConfig.min_score * 100).toFixed(0);
+
         const payload: AlertPayload = {
           title: `[${severity.toUpperCase()}] ${criterion?.name ?? 'Score'} alert — ${system?.name ?? 'Unknown'}`,
-          body: `${criterion?.name ?? 'Score'} score is ${(pair.effective_value * 100).toFixed(0)}% for system "${system?.name ?? 'Unknown'}".`,
+          body: `${criterion?.name ?? 'Score'} score reached ${scorePct}% (threshold: ${thresholdPct}%) for system "${system?.name ?? 'Unknown'}".`,
           severity,
           variant: 'firing',
           system_name: system?.name,
@@ -167,9 +170,11 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
           const system = await db('monitored_systems').where({ id: prev.system_id }).first();
           const criterion = CRITERIA.find((c) => c.id === Number(prev.criterion_id));
 
+          const thresholdPct = (triggerConfig.min_score * 100).toFixed(0);
+
           const payload: AlertPayload = {
             title: `[RESOLVED] ${criterion?.name ?? 'Score'} — ${system?.name ?? 'Unknown'}`,
-            body: `${criterion?.name ?? 'Score'} score has returned below threshold for system "${system?.name ?? 'Unknown'}".`,
+            body: `${criterion?.name ?? 'Score'} score has dropped below ${thresholdPct}% threshold for system "${system?.name ?? 'Unknown'}". Situation appears to have improved.`,
             severity: 'resolved',
             variant: 'resolved',
             system_name: system?.name,

@@ -186,13 +186,12 @@ async function sendTelegram(config: ChannelConfig, payload: AlertPayload): Promi
 
   if (!token || !chatId) throw new Error('Telegram token or chat_id not configured');
 
-  // Escape Markdown special chars for safety
-  const text = `*${escapeMarkdown(payload.title)}*\n\n${escapeMarkdown(payload.body)}`;
-
   // Validate Telegram token format: digits:alphanumeric (no path traversal)
   if (!/^\d+:[A-Za-z0-9_-]+$/.test(token)) {
     throw new Error('Invalid Telegram bot token format');
   }
+
+  const text = formatTelegramMessage(payload);
 
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
@@ -210,6 +209,64 @@ async function sendTelegram(config: ChannelConfig, payload: AlertPayload): Promi
     throw new Error(`Telegram ${res.status}: ${await res.text()}`);
   }
 }
+
+/**
+ * Build a rich Telegram message with emojis, structured layout, and separators.
+ * Uses MarkdownV2 formatting — all special chars must be escaped.
+ */
+function formatTelegramMessage(payload: AlertPayload): string {
+  const esc = escapeMarkdown;
+  const lines: string[] = [];
+
+  if (payload.variant === 'resolved') {
+    // ── Resolved alert ──
+    lines.push(`\u2705 *RESOLVED*`);
+    lines.push(`\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500`);
+    if (payload.system_name) {
+      lines.push(`\uD83D\uDDA5 *System:* ${esc(payload.system_name)}`);
+    }
+    if (payload.criterion) {
+      lines.push(`\uD83D\uDCCA *Criterion:* ${esc(payload.criterion)}`);
+    }
+    lines.push('');
+    lines.push(esc(payload.body));
+    lines.push('');
+    lines.push(`\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500`);
+    lines.push(`\u23F0 ${esc(localTimestamp())}`);
+  } else {
+    // ── Firing alert ──
+    const severityIcon = SEVERITY_ICONS[payload.severity] ?? '\u26A0\uFE0F';
+    const severityLabel = payload.severity.toUpperCase();
+
+    lines.push(`${severityIcon} *${esc(severityLabel)} ALERT*`);
+    lines.push(`\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500`);
+
+    if (payload.system_name) {
+      lines.push(`\uD83D\uDDA5 *System:* ${esc(payload.system_name)}`);
+    }
+    if (payload.criterion) {
+      lines.push(`\uD83D\uDCCA *Criterion:* ${esc(payload.criterion)}`);
+    }
+    lines.push(`\uD83D\uDEA8 *Severity:* ${esc(severityLabel)}`);
+
+    lines.push('');
+    lines.push(`\uD83D\uDCDD ${esc(payload.body)}`);
+
+    lines.push('');
+    lines.push(`\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500`);
+    lines.push(`\u23F0 ${esc(localTimestamp())}  \\|  _SyslogCollectorAI_`);
+  }
+
+  return lines.join('\n');
+}
+
+const SEVERITY_ICONS: Record<string, string> = {
+  critical: '\uD83D\uDD34',  // red circle
+  high:     '\uD83D\uDFE0',  // orange circle
+  medium:   '\uD83D\uDFE1',  // yellow circle
+  low:      '\uD83D\uDFE2',  // green circle
+  info:     '\uD83D\uDD35',  // blue circle
+};
 
 // ── Dispatcher ───────────────────────────────────────────────
 
