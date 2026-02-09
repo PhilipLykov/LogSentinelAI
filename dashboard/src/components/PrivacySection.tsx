@@ -522,7 +522,7 @@ export function PrivacySection({ onAuthError }: PrivacySectionProps) {
                 min={0}
                 max={3650}
                 value={cfg.rag_history_retention_days}
-                onChange={(e) => setCfg({ ...cfg, rag_history_retention_days: Number(e.target.value) || 0 })}
+                onChange={(e) => setCfg({ ...cfg, rag_history_retention_days: Number(e.target.value) })}
                 style={{ width: '120px' }}
               />
               <span className="field-hint">
