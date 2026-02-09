@@ -1060,6 +1060,251 @@ input:focus-visible,
   color: var(--text);
 }
 
+/* ── AI Usage view ─────────────────────────────────────── */
+
+.usage-view {
+  margin-top: 8px;
+}
+
+.usage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.usage-header-info h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.usage-model-badge {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.usage-model-badge strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.usage-pricing-hint {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.usage-filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.usage-filter-select {
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.usage-filter-select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
+}
+
+.usage-filter-select option {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+/* ── Summary cards ─────────────────────────────────────── */
+
+.usage-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.usage-summary-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: center;
+}
+
+.usage-summary-card.usage-summary-cost {
+  border-color: var(--accent);
+  background: rgba(129, 140, 248, 0.05);
+}
+
+.usage-summary-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.usage-summary-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.usage-summary-cost .usage-summary-value {
+  color: var(--accent);
+}
+
+/* ── Usage table ───────────────────────────────────────── */
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  min-width: 800px;
+}
+
+.usage-table th,
+.usage-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-table th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.usage-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.usage-table .col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-table .col-cost {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.usage-ts {
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.usage-system {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-model {
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* ── Type badges ───────────────────────────────────────── */
+
+.usage-type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.usage-type-badge.per_event {
+  background: rgba(129, 140, 248, 0.12);
+  color: var(--accent);
+}
+
+.usage-type-badge.meta {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--green);
+}
+
+/* ── Empty state ───────────────────────────────────────── */
+
+.usage-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+
+.usage-empty h3 {
+  font-size: 1.1rem;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.usage-empty p {
+  max-width: 500px;
+  margin: 0 auto;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.usage-empty code {
+  background: var(--bg-card);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+
+/* ── Footer ────────────────────────────────────────────── */
+
+.usage-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.usage-disclaimer {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.usage-record-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 /* ── Responsive breakpoints ─────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -1133,6 +1378,24 @@ input:focus-visible,
 
   .col-actions {
     width: auto;
+  }
+
+  .usage-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .usage-summary {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .usage-summary-card {
+    padding: 14px;
+  }
+
+  .usage-summary-value {
+    font-size: 1.2rem;
   }
 }
 

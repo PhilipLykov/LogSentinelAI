@@ -193,6 +193,49 @@ export async function deleteSource(id: string): Promise<void> {
   return apiFetch(`/api/v1/sources/${id}`, { method: 'DELETE' });
 }
 
+// ── LLM Usage ────────────────────────────────────────────────
+
+export interface LlmUsageRecord {
+  id: string;
+  run_type: string;
+  system_id: string | null;
+  system_name: string | null;
+  window_id: string | null;
+  model: string;
+  event_count: number;
+  token_input: number;
+  token_output: number;
+  request_count: number;
+  cost_estimate: number | null;
+  created_at: string;
+}
+
+export interface LlmUsageTotals {
+  total_input: number | null;
+  total_output: number | null;
+  total_requests: number | null;
+  total_cost: number | null;
+}
+
+export interface LlmUsageResponse {
+  records: LlmUsageRecord[];
+  totals: LlmUsageTotals;
+  model: string;
+  pricing: { input: number; output: number } | null;
+}
+
+export async function fetchLlmUsage(opts?: {
+  from?: string;
+  to?: string;
+  system_id?: string;
+}): Promise<LlmUsageResponse> {
+  const params = new URLSearchParams();
+  if (opts?.from) params.set('from', opts.from);
+  if (opts?.to) params.set('to', opts.to);
+  if (opts?.system_id) params.set('system_id', opts.system_id);
+  return apiFetch(`/api/v1/llm-usage?${params}`);
+}
+
 /**
  * Validate an API key against the backend.
  * Returns true if valid, false if 401/403.

@@ -138,17 +138,66 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
   );
 
   // ── LLM usage stats ───────────────────────────────────────
-  app.get<{ Querystring: { from?: string; to?: string; system_id?: string } }>(
+
+  /**
+   * Pricing table for common OpenAI models (USD per 1 million tokens).
+   * Used to compute cost estimates from token counts.
+   */
+  const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+    'gpt-4o-mini':     { input: 0.15,  output: 0.60  },
+    'gpt-4o':          { input: 2.50,  output: 10.00 },
+    'gpt-4-turbo':     { input: 10.00, output: 30.00 },
+    'gpt-4':           { input: 30.00, output: 60.00 },
+    'gpt-3.5-turbo':   { input: 0.50,  output: 1.50  },
+    'o1':              { input: 15.00, output: 60.00 },
+    'o1-mini':         { input: 3.00,  output: 12.00 },
+    'o3-mini':         { input: 1.10,  output: 4.40  },
+  };
+
+  function estimateCost(
+    tokenInput: number,
+    tokenOutput: number,
+    model: string,
+  ): number | null {
+    const pricing = MODEL_PRICING[model];
+    if (!pricing) return null;
+    return (tokenInput * pricing.input + tokenOutput * pricing.output) / 1_000_000;
+  }
+
+  app.get<{ Querystring: { from?: string; to?: string; system_id?: string; limit?: string } }>(
     '/api/v1/llm-usage',
     { preHandler: requireAuth('admin') },
     async (request, reply) => {
-      let query = db('llm_usage').orderBy('created_at', 'desc').limit(100);
+      const rawLimit = Number(request.query.limit ?? 200);
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 1000) : 200;
+
+      let query = db('llm_usage').orderBy('created_at', 'desc').limit(limit);
 
       if (request.query.from) query = query.where('created_at', '>=', request.query.from);
       if (request.query.to) query = query.where('created_at', '<=', request.query.to);
       if (request.query.system_id) query = query.where({ system_id: request.query.system_id });
 
       const usage = await query.select('*');
+
+      const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+      // Resolve system names for display
+      const systemIds = [...new Set(usage.map((r: any) => r.system_id).filter(Boolean))];
+      const systemNames: Record<string, string> = {};
+      if (systemIds.length > 0) {
+        const systems = await db('monitored_systems').whereIn('id', systemIds).select('id', 'name');
+        for (const s of systems) {
+          systemNames[s.id] = s.name;
+        }
+      }
+
+      // Enrich each record with estimated cost and system name
+      const enrichedRecords = usage.map((r: any) => ({
+        ...r,
+        model,
+        system_name: r.system_id ? (systemNames[r.system_id] ?? 'Unknown') : null,
+        cost_estimate: r.cost_estimate ?? estimateCost(r.token_input, r.token_output, model),
+      }));
 
       // Totals — apply same filters so totals match the records
       let totalsQuery = db('llm_usage');
@@ -162,7 +211,18 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         .sum('request_count as total_requests')
         .first();
 
-      return reply.send({ records: usage, totals });
+      const totalInput = Number(totals?.total_input ?? 0);
+      const totalOutput = Number(totals?.total_output ?? 0);
+
+      return reply.send({
+        records: enrichedRecords,
+        totals: {
+          ...totals,
+          total_cost: estimateCost(totalInput, totalOutput, model),
+        },
+        model,
+        pricing: MODEL_PRICING[model] ?? null,
+      });
     },
   );
 }

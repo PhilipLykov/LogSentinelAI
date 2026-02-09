@@ -4,9 +4,10 @@ import { SystemCard } from './components/SystemCard';
 import { DrillDown } from './components/DrillDown';
 import { LoginForm } from './components/LoginForm';
 import { SettingsView } from './components/SettingsView';
+import { LlmUsageView } from './components/LlmUsageView';
 import './index.css';
 
-type View = 'dashboard' | 'settings';
+type View = 'dashboard' | 'settings' | 'ai-usage';
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(!!getStoredApiKey());
@@ -100,6 +101,11 @@ export default function App() {
     loadSystems(true);
   };
 
+  const switchToAiUsage = () => {
+    setView('ai-usage');
+    setSelectedSystem(null);
+  };
+
   return (
     <div className="app">
       <header className="header">
@@ -115,6 +121,14 @@ export default function App() {
               aria-selected={view === 'dashboard'}
             >
               Dashboard
+            </button>
+            <button
+              className={`nav-tab${view === 'ai-usage' ? ' active' : ''}`}
+              onClick={switchToAiUsage}
+              role="tab"
+              aria-selected={view === 'ai-usage'}
+            >
+              AI Usage
             </button>
             <button
               className={`nav-tab${view === 'settings' ? ' active' : ''}`}
@@ -150,7 +164,9 @@ export default function App() {
 
       {error && <div className="error-msg" role="alert">{error}</div>}
 
-      {view === 'settings' ? (
+      {view === 'ai-usage' ? (
+        <LlmUsageView onAuthError={handleLogout} />
+      ) : view === 'settings' ? (
         <SettingsView onAuthError={handleLogout} />
       ) : selectedSystem ? (
         <DrillDown
