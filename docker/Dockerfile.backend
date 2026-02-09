@@ -1,0 +1,38 @@
+# ── Build stage ────────────────────────────────────────────
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# ── Production stage ──────────────────────────────────────
+FROM node:22-alpine
+
+# Security: run as non-root (OWASP A05)
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/package-lock.json* ./
+
+# Install only production dependencies (smaller image, no devDependencies)
+RUN npm ci --omit=dev && npm cache clean --force
+
+# Knex migrations/seeds are compiled into dist/
+# Data directory for any local files
+RUN mkdir -p /app/data && chown appuser:appgroup /app/data
+
+USER appuser
+
+ENV NODE_ENV=production
+ENV TZ=Europe/Chisinau
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -qO- http://localhost:3000/healthz || exit 1
+
+CMD ["node", "dist/server.js"]

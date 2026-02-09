@@ -1,0 +1,33 @@
+{
+  "name": "syslog-collector-ai-backend",
+  "version": "0.1.0",
+  "description": "AI Log Audit and Analysis Solution - Backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "migrate": "tsx node_modules/.bin/knex migrate:latest --knexfile knexfile.ts",
+    "migrate:rollback": "tsx node_modules/.bin/knex migrate:rollback --knexfile knexfile.ts",
+    "seed": "tsx node_modules/.bin/knex seed:run --knexfile knexfile.ts",
+    "db:setup": "npm run migrate && npm run seed",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "@fastify/helmet": "^12.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "dotenv": "^16.4.0",
+    "fastify": "^5.0.0",
+    "knex": "^3.1.0",
+    "pg": "^8.13.0",
+    "uuid": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
