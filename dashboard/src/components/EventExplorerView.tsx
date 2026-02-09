@@ -19,7 +19,7 @@ const PAGE_SIZE = 100;
 
 // ── EU date format helpers ────────────────────────────────────
 
-/** Format ISO string as DD.MM.YYYY HH:MM:SS (EU format). */
+/** Format ISO string as DD-MM-YYYY HH:MM:SS (EU format). */
 function formatEuDate(iso: string): string {
   try {
     const d = new Date(iso);
@@ -30,7 +30,7 @@ function formatEuDate(iso: string): string {
     const hours = String(d.getHours()).padStart(2, '0');
     const minutes = String(d.getMinutes()).padStart(2, '0');
     const seconds = String(d.getSeconds()).padStart(2, '0');
-    return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`;
+    return `${day}-${month}-${year} ${hours}:${minutes}:${seconds}`;
   } catch {
     return iso;
   }

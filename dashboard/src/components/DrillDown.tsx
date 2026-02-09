@@ -578,7 +578,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
   );
 }
 
-/** Safely format a date as DD.MM.YYYY HH:MM:SS (EU format). */
+/** Safely format a date as DD-MM-YYYY HH:MM:SS (EU format). */
 function safeDate(ts: string): string {
   try {
     const d = new Date(ts);
@@ -589,7 +589,7 @@ function safeDate(ts: string): string {
     const hours = String(d.getHours()).padStart(2, '0');
     const minutes = String(d.getMinutes()).padStart(2, '0');
     const seconds = String(d.getSeconds()).padStart(2, '0');
-    return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`;
+    return `${day}-${month}-${year} ${hours}:${minutes}:${seconds}`;
   } catch {
     return ts;
   }
