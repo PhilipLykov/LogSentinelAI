@@ -204,7 +204,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         .update({
           status: 'acknowledged',
           acknowledged_at: now,
-          acknowledged_by: 'admin', // Future: extract from auth context
+          acknowledged_by: request.currentUser?.username ?? request.apiKey?.name ?? 'system',
         });
 
       await writeAuditLog(db, {

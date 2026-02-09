@@ -120,6 +120,7 @@ export interface ApiKeyRow {
   expires_at?: string;
   last_used_at?: string;
   is_active: boolean;
+  allowed_ips?: string[] | null;
   created_at: string;
 }
 

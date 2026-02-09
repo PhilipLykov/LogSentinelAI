@@ -84,7 +84,10 @@ export function AuditLogSection({ onAuthError }: Props) {
     // Open in new tab with auth header workaround (download via fetch + blob)
     const token = getStoredApiKey();
     fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
-      .then((res) => res.blob())
+      .then((res) => {
+        if (!res.ok) throw new Error(`Export failed: ${res.status} ${res.statusText}`);
+        return res.blob();
+      })
       .then((blob) => {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -92,7 +95,7 @@ export function AuditLogSection({ onAuthError }: Props) {
         a.click();
         URL.revokeObjectURL(a.href);
       })
-      .catch(() => setError('Export failed.'));
+      .catch((err) => setError(err instanceof Error ? err.message : 'Export failed.'));
   };
 
   return (

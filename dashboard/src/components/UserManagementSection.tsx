@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   type UserInfo,
+  type CurrentUser,
   fetchUsers,
   createUser,
   updateUser,
@@ -17,9 +18,10 @@ const ROLES = [
 
 interface Props {
   onAuthError: () => void;
+  currentUser?: CurrentUser | null;
 }
 
-export function UserManagementSection({ onAuthError }: Props) {
+export function UserManagementSection({ onAuthError, currentUser }: Props) {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -119,7 +121,13 @@ export function UserManagementSection({ onAuthError }: Props) {
     }
   };
 
+  const isSelf = (u: UserInfo) => currentUser?.id === u.id;
+
   const handleToggleActive = async (u: UserInfo) => {
+    if (isSelf(u)) {
+      setError('You cannot disable your own account.');
+      return;
+    }
     setError('');
     setSuccess('');
     try {
@@ -132,6 +140,10 @@ export function UserManagementSection({ onAuthError }: Props) {
   };
 
   const handleDelete = async (u: UserInfo) => {
+    if (isSelf(u)) {
+      setError('You cannot delete your own account.');
+      return;
+    }
     if (!confirm(`Deactivate user "${u.username}"? This will invalidate all their sessions.`)) return;
     setError('');
     setSuccess('');
@@ -265,13 +277,15 @@ export function UserManagementSection({ onAuthError }: Props) {
                       <>
                         <button className="btn btn-xs btn-outline" onClick={() => handleEdit(u)}>Edit</button>
                         <button className="btn btn-xs btn-outline" onClick={() => { setResetId(u.id); setResetPw(''); }}>Reset PW</button>
-                        <button
-                          className={`btn btn-xs ${u.is_active ? 'btn-outline' : 'btn-success-outline'}`}
-                          onClick={() => handleToggleActive(u)}
-                        >
-                          {u.is_active ? 'Disable' : 'Enable'}
-                        </button>
-                        {u.is_active && (
+                        {!isSelf(u) && (
+                          <button
+                            className={`btn btn-xs ${u.is_active ? 'btn-outline' : 'btn-success-outline'}`}
+                            onClick={() => handleToggleActive(u)}
+                          >
+                            {u.is_active ? 'Disable' : 'Enable'}
+                          </button>
+                        )}
+                        {u.is_active && !isSelf(u) && (
                           <button className="btn btn-xs btn-danger-outline" onClick={() => handleDelete(u)}>Delete</button>
                         )}
                       </>

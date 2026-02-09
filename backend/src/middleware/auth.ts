@@ -124,14 +124,14 @@ export function requireAuth(permission: Permission) {
     }
 
     // Check IP allowlist
+    const allowedIps = keyRow.allowed_ips;
     if (
-      (keyRow as any).allowed_ips &&
-      Array.isArray((keyRow as any).allowed_ips) &&
-      (keyRow as any).allowed_ips.length > 0 &&
-      !(keyRow as any).allowed_ips.includes(request.ip)
+      Array.isArray(allowedIps) &&
+      allowedIps.length > 0 &&
+      !allowedIps.includes(request.ip ?? '')
     ) {
       console.log(
-        `[${localTimestamp()}] AUTH_FAIL: API key "${keyRow.name}" IP ${request.ip} not in allowlist`,
+        `[${localTimestamp()}] AUTH_FAIL: API key "${keyRow.name}" IP ${request.ip ?? 'unknown'} not in allowlist`,
       );
       return reply.code(403).send({ error: 'Insufficient permissions' });
     }

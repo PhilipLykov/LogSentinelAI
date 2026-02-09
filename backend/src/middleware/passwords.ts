@@ -1,7 +1,4 @@
 import bcrypt from 'bcryptjs';
-import { randomBytes } from 'node:crypto';
-import { v4 as uuidv4 } from 'uuid';
-import type { Knex } from 'knex';
 import { localTimestamp } from '../config/index.js';
 
 // ── Constants ────────────────────────────────────────────────
@@ -112,50 +109,4 @@ export function resetLockout(): {
   };
 }
 
-// ── Bootstrap admin user ────────────────────────────────────
-
-/**
- * Ensure at least one admin user exists.
- * Uses ADMIN_USERNAME / ADMIN_PASSWORD env vars, or generates credentials.
- */
-export async function ensureAdminUser(db: Knex): Promise<void> {
-  const existing = await db('users').where({ role: 'administrator' }).first();
-  if (existing) return;
-
-  const username = process.env.ADMIN_USERNAME ?? 'admin';
-  const password = process.env.ADMIN_PASSWORD;
-
-  if (password) {
-    const passwordHash = await hashPassword(password);
-    await db('users').insert({
-      id: uuidv4(),
-      username,
-      password_hash: passwordHash,
-      display_name: 'Administrator',
-      role: 'administrator',
-      is_active: true,
-      must_change_password: false,
-    });
-    console.log(`[${localTimestamp()}] Admin user created from environment: username="${username}"`);
-  } else {
-    // Generate a random password and print it
-    const generatedPassword = randomBytes(16).toString('base64url');
-    const passwordHash = await hashPassword(generatedPassword);
-    await db('users').insert({
-      id: uuidv4(),
-      username,
-      password_hash: passwordHash,
-      display_name: 'Administrator',
-      role: 'administrator',
-      is_active: true,
-      must_change_password: true,
-    });
-
-    const border = '─'.repeat(Math.max(generatedPassword.length, username.length) + 32);
-    console.log(`[${localTimestamp()}] ┌${border}┐`);
-    console.log(`[${localTimestamp()}] │  AUTO-GENERATED ADMIN CREDENTIALS (save them now!)${' '.repeat(Math.max(0, border.length - 52))}  │`);
-    console.log(`[${localTimestamp()}] │  Username: ${username}${' '.repeat(Math.max(0, border.length - username.length - 14))}  │`);
-    console.log(`[${localTimestamp()}] │  Password: ${generatedPassword}${' '.repeat(Math.max(0, border.length - generatedPassword.length - 14))}  │`);
-    console.log(`[${localTimestamp()}] └${border}┘`);
-  }
-}
+// Note: ensureAdminUser is in bootstrapAdmin.ts (used by server.ts at startup)

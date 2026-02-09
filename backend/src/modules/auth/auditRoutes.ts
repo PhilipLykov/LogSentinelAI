@@ -79,11 +79,14 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
 
       const total = Number(totalResult?.cnt ?? 0);
 
-      // Parse JSON details
-      const items = rows.map((r: any) => ({
-        ...r,
-        details: typeof r.details === 'string' ? JSON.parse(r.details) : r.details,
-      }));
+      // Parse JSON details (safely handle corrupted data)
+      const items = rows.map((r: any) => {
+        let details = r.details;
+        if (typeof details === 'string') {
+          try { details = JSON.parse(details); } catch { /* keep as raw string */ }
+        }
+        return { ...r, details };
+      });
 
       return reply.send({
         items,
@@ -143,11 +146,14 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
         return reply.send(header + csvRows.join('\n'));
       }
 
-      // JSON format
-      const items = rows.map((r: any) => ({
-        ...r,
-        details: typeof r.details === 'string' ? JSON.parse(r.details) : r.details,
-      }));
+      // JSON format (safely handle corrupted data)
+      const items = rows.map((r: any) => {
+        let details = r.details;
+        if (typeof details === 'string') {
+          try { details = JSON.parse(details); } catch { /* keep as raw string */ }
+        }
+        return { ...r, details };
+      });
 
       reply.header('Content-Type', 'application/json');
       reply.header('Content-Disposition', `attachment; filename="audit_log_${new Date().toISOString().slice(0, 10)}.json"`);

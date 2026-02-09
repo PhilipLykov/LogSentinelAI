@@ -161,6 +161,7 @@ export const API_KEY_SCOPE_PERMISSIONS: Record<string, ReadonlySet<Permission>> 
     P.USERS_MANAGE,
     P.API_KEYS_MANAGE,
     P.AUDIT_VIEW,
+    P.AUDIT_EXPORT,
     P.RAG_USE,
     P.AI_USAGE_VIEW,
     P.COMPLIANCE_EXPORT,

@@ -318,7 +318,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
       ) : activeTab === 'privacy' ? (
         <PrivacySection onAuthError={onAuthError} />
       ) : activeTab === 'users' ? (
-        <UserManagementSection onAuthError={onAuthError} />
+        <UserManagementSection onAuthError={onAuthError} currentUser={currentUser} />
       ) : activeTab === 'api-keys' ? (
         <ApiKeyManagementSection onAuthError={onAuthError} />
       ) : activeTab === 'audit-log' ? (

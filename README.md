@@ -1,26 +1,56 @@
-# SyslogCollectorAI — AI-Powered Log Audit & Analysis
+# SyslogCollectorAI
 
-Enterprise-grade system that **collects** syslog events, **stores** them in PostgreSQL, and **analyzes** them with AI (OpenAI-compatible LLM) across 6 security and operational criteria. Features a real-time React dashboard with event exploration, AI-generated findings, alerting, privacy controls, and database maintenance — all configurable via GUI.
+**Intelligent Log Monitoring Platform with AI-Powered Analysis**
 
-> **Secure by design** — follows [OWASP Top 10](./SECURITY_OWASP.md). All secrets stay in env; no plaintext keys in DB.
+SyslogCollectorAI transforms raw syslog streams into actionable security and operational intelligence. It continuously collects, normalizes, and stores log events from any source, then applies multi-dimensional AI analysis to surface threats, predict failures, and detect anomalies — all through an intuitive real-time dashboard.
 
-## Key Features
+---
 
-- **AI Scoring** — every event is scored across 6 criteria: IT Security, Performance Degradation, Failure Prediction, Anomaly Detection, Compliance/Audit, and Operational Risk
-- **Meta-Analysis** — sliding-window analysis produces structured findings with lifecycle management (deduplication via TF-IDF/Jaccard similarity, severity decay, auto-resolution)
-- **Event Explorer** — full-text and substring search, filter by system/severity/host/source IP/program, sort, paginate (100 per page), keyword highlighting, EU date format (DD-MM-YYYY)
-- **Event Tracing** — cross-system correlation by trace ID, span ID, or message substring
-- **Source IP Tracking** — events carry the originating IP address; filterable and sortable in the UI
-- **Event Acknowledgment** — bulk ack/unack with configurable LLM behavior (skip or context-only mode)
-- **RAG "Ask AI"** — natural language queries across all events with persistent chat history
-- **LLM Token Optimization** — score caching by message template, severity pre-filtering, message truncation, configurable batch size, low-score auto-skip
-- **Alerting** — rule-based notifications via Webhook, Pushover, NTfy, Gotify, Telegram; silences, throttling, recovery alerts
-- **Privacy Controls** — PII masking (IP, email, phone, URL, MAC, credit card, password/secret, API key, username, custom regex), field stripping, bulk event deletion, RAG/LLM usage purge
-- **Database Backup** — automated pg_dump backups with configurable schedule, retention, format (custom binary / plain SQL), download & delete from UI
-- **Database Maintenance** — per-system data retention, scheduled VACUUM ANALYZE & REINDEX, manual trigger, run history
-- **Table Partitioning** — events table auto-partitioned by month for faster queries and instant old-data cleanup via partition drops
-- **Configurable Prompts** — system, meta-analysis, and RAG prompts editable via GUI
-- **LLM Usage Tracking** — per-request token count and cost estimation with model-aware pricing
+## Why SyslogCollectorAI?
+
+### AI-Powered Analysis
+
+- **6-Criteria Event Scoring** — Every ingested event is evaluated by an LLM across IT Security, Performance Degradation, Failure Prediction, Anomaly Detection, Compliance/Audit, and Operational Risk. Each criterion uses a dedicated, tunable system prompt so domain experts can calibrate the AI's judgment without touching code.
+- **Meta-Analysis with Findings** — A sliding-window pipeline aggregates per-event scores into holistic assessments, producing structured findings with full lifecycle management: automatic deduplication (TF-IDF + Jaccard similarity), severity decay, and auto-resolution when issues no longer recur.
+- **Content-Based Severity Enrichment** — Syslog header severity is often inaccurate (e.g., Docker logs everything as "info"). The platform scans message bodies for error/warning indicators and upgrades severity automatically, so events like `error: permission denied` are correctly classified.
+- **RAG "Ask AI"** — Natural language interface to query your entire event history. Ask questions like *"Were there any failed SSH logins last night?"* or *"Summarize the Docker container issues from the past week"* with persistent chat history.
+- **Token Optimization** — Intelligent deduplication via template extraction, score caching, severity pre-filtering, and configurable batch sizing reduce LLM costs by up to 80% without sacrificing analysis quality. Real-time usage tracking with per-model cost estimation keeps spending visible.
+
+### UX & UI
+
+- **Real-Time Dashboard** — Live score bars per system across all 6 criteria with automatic SSE-based refresh. Click any score bar to drill into the contributing events with a transparent breakdown showing how much comes from AI meta-analysis vs. individual event scoring.
+- **Event Explorer** — Full-text search with instant filtering by system, severity, host, source IP, or program. Paginated results with keyword highlighting, sortable columns, and cross-system event tracing by trace ID or message correlation.
+- **AI Findings Panel** — Tabbed interface (Open / Acknowledged / Resolved) with one-click acknowledgment, bulk operations, and automatic lifecycle transitions. The meta-analysis summary is prominently displayed with visual distinction.
+- **Fully GUI-Configurable** — Every setting is adjustable through the web interface: AI model parameters, system prompts, notification channels, database maintenance schedules, privacy filters, user accounts, and API keys. No SSH or config file editing required after initial deployment.
+- **Responsive Alerting** — Visual notification configuration with test buttons for each channel. Define alert rules with severity thresholds, silence windows, throttling, and recovery notifications.
+
+### Security & Privacy
+
+- **Role-Based Access Control (RBAC)** — Three built-in roles (Administrator, Auditor, Monitoring Agent) with 20 granular permissions controlling access to every UI element and API endpoint. Auditors get read-only access; monitoring agents see dashboards and acknowledge events but cannot change settings.
+- **User Management** — Username/password authentication with bcrypt hashing (cost 12), mandatory password complexity (12+ chars, mixed case, digits, special characters), automatic account lockout after failed attempts, and forced password change on first login.
+- **Session & API Key Security** — Sessions use cryptographically random tokens stored as SHA-256 hashes with configurable expiry. API keys support scope-based permissions, IP allowlists, expiration dates, and one-click revocation.
+- **Immutable Audit Log** — Every administrative action is recorded with timestamp, actor, IP address, and full details. A PostgreSQL trigger physically prevents modification or deletion of audit records. Export as CSV or JSON for compliance reporting.
+- **Privacy Controls** — PII masking (IP addresses, emails, phone numbers, URLs, MAC addresses, credit cards, passwords, API keys, usernames) with configurable custom regex patterns. Field stripping removes sensitive fields before LLM submission. Bulk event deletion with confirmation safeguard.
+- **OWASP Top 10 Compliance** — Parameterized queries (A03), secure headers via Helmet (A05), rate limiting (A04), secrets stored only in environment variables (A02), non-root Docker containers (A05), generic error messages (A07), and comprehensive security logging (A09).
+
+### Scalability
+
+- **Time-Based Table Partitioning** — The events table is automatically partitioned by month. New partitions are created on demand; old data is cleaned up by dropping entire partitions rather than row-by-row deletion, enabling instant cleanup of millions of records.
+- **Efficient Indexing** — Composite indexes on system_id + timestamp, severity, source_ip, and full-text search columns. Scheduled REINDEX CONCURRENTLY and VACUUM ANALYZE keep query performance stable as data grows.
+- **Configurable Data Retention** — Global and per-system retention policies automatically purge old events. Combined with partitioning, this allows different systems to have different retention windows (e.g., 30 days for debug logs, 365 days for security events).
+- **Horizontal Event Ingestion** — The stateless ingest API accepts events in three JSON formats (batch, array, single) from any number of log shippers simultaneously. Compatible with Fluent Bit, Vector, Logstash, rsyslog, and custom HTTP clients.
+- **Automated Database Backup** — Scheduled pg_dump backups with configurable format (custom binary or plain SQL), retention limits, and direct download from the UI.
+
+### Enterprise-Grade Features
+
+- **Multi-System Monitoring** — Monitor unlimited systems from a single deployment. Each system has independent log source selectors (regex-based field matching with priority ordering), retention policies, and AI analysis pipelines.
+- **Flexible Log Source Matching** — Regex-based selectors match incoming events to systems by any combination of fields (host, source_ip, service, program, facility). Priority ordering ensures specific rules take precedence over catch-all rules.
+- **Comprehensive Alerting** — Five notification channels (Webhook, Pushover, NTfy, Gotify, Telegram) with configurable rules, severity thresholds, silence windows, throttle intervals, and recovery alerts. Secrets referenced via environment variables — never stored in the database.
+- **Compliance Export** — One-click export of events, scores, and findings in CSV or JSON format for regulatory compliance and external auditing.
+- **Per-Criterion AI Prompts** — Each of the 6 scoring criteria has an independently configurable system prompt, allowing security teams to inject domain-specific guidance (e.g., *"Flag any SSH brute force patterns"* for IT Security, *"Watch for disk I/O saturation"* for Performance).
+- **LLM Provider Flexibility** — Works with any OpenAI-compatible API (OpenAI, Azure OpenAI, Ollama, LM Studio, vLLM). Change models or providers through the GUI without redeployment.
+
+---
 
 ## Architecture
 
@@ -28,7 +58,7 @@ Enterprise-grade system that **collects** syslog events, **stores** them in Post
 Syslog / Log Shippers (Fluent Bit, Vector, Logstash, rsyslog)
     |
     v
-Ingest API ── Normalize ── Source Match ── Redact ── Persist (PostgreSQL)
+Ingest API ── Normalize ── Severity Enrich ── Source Match ── Redact ── Persist (PostgreSQL)
     |
     v
 Dedup & Template Extraction ── Per-Event LLM Scoring (6 criteria)
@@ -45,366 +75,83 @@ Dashboard (React)  <-->  Alerting (Webhook, Pushover, NTfy, Gotify, Telegram)
     +-- Event Explorer (search, filter, trace, ack)
     +-- AI Findings (open, acknowledged, resolved)
     +-- RAG "Ask AI" (natural language queries)
-    +-- Settings (AI config, prompts, notifications, DB maintenance, privacy)
+    +-- Settings (AI config, prompts, notifications, DB, privacy)
+    +-- User Management (RBAC, API keys, audit log)
     +-- LLM Usage & Cost Tracking
 ```
-
-## Quick Start (Development)
-
-### Prerequisites
-
-- **Node.js** >= 20
-- **PostgreSQL** >= 14
-
-### 1. Clone & install
-
-```bash
-cd backend && npm install
-cd ../dashboard && npm install
-```
-
-### 2. Configure
-
-```bash
-cd backend
-cp .env.example .env
-# Edit .env — set DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, OPENAI_API_KEY
-```
-
-### 3. Create the database
-
-```sql
-CREATE DATABASE syslog_collector_ai;
-CREATE USER syslog_ai WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE syslog_collector_ai TO syslog_ai;
-\c syslog_collector_ai
-GRANT CREATE ON SCHEMA public TO syslog_ai;
-```
-
-### 4. Run backend
-
-```bash
-cd backend
-npm run dev
-```
-
-On first start, the server will:
-1. Run all database migrations (17 migration files)
-2. Seed the 6 analysis criteria
-3. Generate an admin API key (printed to console — **save it**)
-
-### 5. Run dashboard
-
-```bash
-cd dashboard
-npm run dev
-```
-
-Open `http://localhost:5173` and enter your admin API key.
-
-## Docker (Production)
-
-**Prerequisites:** An external PostgreSQL instance (>= 14).
-
-```bash
-cd docker
-# Edit .env with your DB credentials, OPENAI_API_KEY, etc.
-docker compose build
-docker compose up -d
-```
-
-Services:
-- **backend** on port `3000` (API + AI pipeline)
-- **dashboard** on port `8070` (React UI via nginx)
-
-The backend container mounts `./backups` for database backup files. These persist across container restarts.
-
-## Syslog Forwarder Setup
-
-To forward local syslog to SyslogCollectorAI, configure rsyslog to write JSON and use the included Python forwarder:
-
-**1. rsyslog template** (`/etc/rsyslog.d/60-syslogcollector.conf`):
-
-```
-template(name="SyslogAiJson" type="list") {
-    constant(value="{\"timestamp\":\"")
-    property(name="timereported" dateFormat="rfc3339")
-    constant(value="\",\"message\":\"")
-    property(name="msg" format="jsonr" droplastlf="on")
-    constant(value="\",\"host\":\"")
-    property(name="hostname" format="jsonr")
-    constant(value="\",\"source_ip\":\"")
-    property(name="fromhost-ip")
-    constant(value="\",\"severity\":\"")
-    property(name="syslogseverity-text")
-    constant(value="\",\"facility\":\"")
-    property(name="syslogfacility-text")
-    constant(value="\",\"program\":\"")
-    property(name="programname" format="jsonr")
-    constant(value="\"}\n")
-}
-
-if $programname != 'syslog-forwarder.py' then {
-    action(type="omfile" file="/var/log/syslog-ai.jsonl" template="SyslogAiJson")
-}
-```
-
-**2.** Set up the Python forwarder script and systemd service as described in the deployment guide.
-
-## Connecting Log Shippers
-
-The ingest API accepts three JSON formats:
-- `{ "events": [...] }` — canonical batch format
-- `[{...}, {...}]` — bare JSON array (rsyslog omhttp, Fluent Bit batch)
-- `{ "message": "...", ... }` — single event object
-
-### Fluent Bit
-
-```ini
-[OUTPUT]
-    Name        http
-    Match       *
-    Host        your-server
-    Port        3000
-    URI         /api/v1/ingest
-    Format      json
-    Header      X-API-Key YOUR_INGEST_KEY
-    json_date_key timestamp
-    json_date_format iso8601
-```
-
-### Vector
-
-```toml
-[sinks.syslog_ai]
-  type = "http"
-  inputs = ["your_source"]
-  uri = "http://your-server:3000/api/v1/ingest"
-  encoding.codec = "json"
-  headers.X-API-Key = "YOUR_INGEST_KEY"
-```
-
-### Logstash
-
-```ruby
-output {
-  http {
-    url => "http://your-server:3000/api/v1/ingest"
-    http_method => "post"
-    format => "json"
-    headers => { "X-API-Key" => "YOUR_INGEST_KEY" }
-  }
-}
-```
-
-## Accepted Event Fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `message` / `msg` / `short_message` | **Yes** | Log message content |
-| `timestamp` / `time` / `@timestamp` | No | ISO 8601 or Unix epoch (auto-detected) |
-| `severity` / `level` | No | Syslog severity name or number |
-| `host` / `hostname` / `source` | No | Originating hostname |
-| `source_ip` / `fromhost_ip` / `ip` | No | Source IP address |
-| `service` / `service_name` | No | Service/application name |
-| `program` / `app_name` | No | Program name |
-| `facility` | No | Syslog facility |
-| `trace_id` / `traceId` | No | Distributed trace ID |
-| `span_id` / `spanId` | No | Span ID |
-| `external_id` | No | External reference ID |
-| `connector_id` | No | Connector identifier |
-
-Unknown fields are preserved in the `raw` JSON column.
-
-## API Endpoints
-
-All endpoints require `X-API-Key` header with appropriate scope.
-
-### Ingest
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `POST` | `/api/v1/ingest` | ingest, admin | Ingest batch of log events |
-
-### Systems & Sources
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET` | `/api/v1/systems` | admin, read, dashboard | List monitored systems |
-| `GET` | `/api/v1/systems/:id` | admin, read, dashboard | Get system by ID |
-| `POST` | `/api/v1/systems` | admin | Create system (with optional `retention_days`) |
-| `PUT` | `/api/v1/systems/:id` | admin | Update system |
-| `DELETE` | `/api/v1/systems/:id` | admin | Delete system and all its data |
-| `GET` | `/api/v1/sources` | admin, read, dashboard | List log sources |
-| `GET` | `/api/v1/sources/:id` | admin, read, dashboard | Get log source by ID |
-| `POST` | `/api/v1/sources` | admin | Create log source |
-| `PUT` | `/api/v1/sources/:id` | admin | Update log source |
-| `DELETE` | `/api/v1/sources/:id` | admin | Delete log source |
-
-### Events & Search
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET` | `/api/v1/events/search` | admin, read, dashboard | Search events (full-text or substring, filter by system/severity/host/source_ip/program, date range, sort, paginate) |
-| `GET` | `/api/v1/events/facets` | admin, read, dashboard | Distinct filter values (severities, hosts, source IPs, programs, systems) |
-| `GET` | `/api/v1/events/trace` | admin, read, dashboard | Cross-system event correlation by trace_id, span_id, or message |
-| `POST` | `/api/v1/events/acknowledge` | admin | Bulk-acknowledge events in a time range |
-| `POST` | `/api/v1/events/unacknowledge` | admin | Bulk-unacknowledge events |
-| `GET` | `/api/v1/events/ack-config` | admin | Get acknowledgment mode and prompt |
-| `PUT` | `/api/v1/events/ack-config` | admin | Update acknowledgment mode (`skip` or `context_only`) and prompt |
-| `POST` | `/api/v1/events/bulk-delete` | admin | Delete events in date range (requires `confirmation: "YES"`) |
-
-### Dashboard & Scores
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET` | `/api/v1/dashboard/systems` | admin, read, dashboard | Dashboard overview (all systems with scores) |
-| `GET` | `/api/v1/systems/:id/events` | admin, read, dashboard | System events (drill-down) |
-| `GET` | `/api/v1/systems/:id/meta` | admin, read, dashboard | Meta-analysis result |
-| `GET` | `/api/v1/systems/:id/findings` | admin, read, dashboard | AI findings for a system |
-| `PUT` | `/api/v1/findings/:id/acknowledge` | admin | Acknowledge a finding |
-| `PUT` | `/api/v1/findings/:id/reopen` | admin | Reopen a finding |
-| `GET` | `/api/v1/scores/systems` | admin, read, dashboard | Effective scores per system |
-| `GET` | `/api/v1/scores/stream` | admin, read, dashboard | SSE stream of score updates |
-| `GET` | `/api/v1/systems/:id/event-scores` | admin, read, dashboard | Scored events for a criterion |
-| `GET` | `/api/v1/events/:id/scores` | admin, read, dashboard | All scores for a single event |
-| `GET` | `/api/v1/windows` | admin, read, dashboard | List analysis windows |
-| `GET` | `/api/v1/windows/:id/meta` | admin, read, dashboard | Meta result for a window |
-
-### RAG (Ask AI)
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `POST` | `/api/v1/ask` | admin, read, dashboard | Ask a natural language question about events |
-| `GET` | `/api/v1/ask/history` | admin, read, dashboard | List past Q&A entries |
-| `DELETE` | `/api/v1/ask/history` | admin | Clear RAG chat history |
-
-### AI Configuration
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET` | `/api/v1/ai-config` | admin | Get AI model configuration |
-| `PUT` | `/api/v1/ai-config` | admin | Update AI model, API key reference, parameters |
-| `GET` | `/api/v1/ai-prompts` | admin | Get current system prompts (scoring, meta, RAG) |
-| `PUT` | `/api/v1/ai-prompts` | admin | Update system prompts |
-| `GET` | `/api/v1/token-optimization` | admin | Get token optimization config |
-| `PUT` | `/api/v1/token-optimization` | admin | Update token optimization parameters |
-| `POST` | `/api/v1/token-optimization/invalidate-cache` | admin | Clear all template score caches |
-| `GET` | `/api/v1/meta-analysis-config` | admin | Get meta-analysis & finding dedup config |
-| `PUT` | `/api/v1/meta-analysis-config` | admin | Update meta-analysis parameters |
-
-### Alerting & Notifications
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET/POST/PUT/DELETE` | `/api/v1/notification-channels` | admin | CRUD notification channels |
-| `POST` | `/api/v1/notification-channels/:id/test` | admin | Test a notification channel |
-| `GET/POST/PUT/DELETE` | `/api/v1/notification-rules` | admin | CRUD alert rules |
-| `GET/POST/DELETE` | `/api/v1/silences` | admin | CRUD silences |
-| `GET` | `/api/v1/alerts` | admin, read, dashboard | Alert history |
-
-### Database Maintenance
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET` | `/api/v1/maintenance-config` | admin | Get maintenance config, per-system retention, DB stats |
-| `PUT` | `/api/v1/maintenance-config` | admin | Update global retention days and maintenance interval |
-| `POST` | `/api/v1/maintenance/run` | admin | Trigger a manual maintenance run |
-| `GET` | `/api/v1/maintenance/history` | admin | List past maintenance run logs |
-| `GET` | `/api/v1/maintenance/backup/config` | admin | Get backup configuration |
-| `PUT` | `/api/v1/maintenance/backup/config` | admin | Update backup settings (schedule, retention, format) |
-| `POST` | `/api/v1/maintenance/backup/trigger` | admin | Trigger a manual database backup |
-| `GET` | `/api/v1/maintenance/backup/list` | admin | List available backup files with sizes |
-| `GET` | `/api/v1/maintenance/backup/download/:filename` | admin | Download a backup file |
-| `DELETE` | `/api/v1/maintenance/backup/:filename` | admin | Delete a specific backup file |
-
-### Privacy
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET` | `/api/v1/privacy-config` | admin | Get privacy filter settings |
-| `PUT` | `/api/v1/privacy-config` | admin | Update PII masking, field stripping, retention settings |
-| `POST` | `/api/v1/privacy/test-filter` | admin | Test privacy filter against a sample message |
-| `POST` | `/api/v1/privacy/purge-rag-history` | admin | Delete all RAG chat history (requires `confirmation: "YES"`) |
-| `POST` | `/api/v1/privacy/purge-llm-usage` | admin | Delete all LLM usage logs (requires `confirmation: "YES"`) |
-
-### Other
-
-| Method | Path | Scope | Description |
-|--------|------|-------|-------------|
-| `GET/PUT` | `/api/v1/config` | admin | General app configuration |
-| `GET` | `/api/v1/costs` | admin | LLM cost summary |
-| `GET` | `/api/v1/llm-usage` | admin | Detailed LLM usage records with per-request cost |
-| `POST` | `/api/v1/export/compliance` | admin | Compliance export (CSV/JSON) |
-| `GET/POST/PUT/DELETE` | `/api/v1/connectors` | admin | CRUD pull connectors |
-| `GET` | `/api/v1/connectors/types` | admin | Available connector types |
-
-## Redaction
-
-Set `REDACTION_ENABLED=true` to strip secrets/passwords from log content **before** storage and AI analysis. Built-in patterns cover:
-- Passwords (`password=`, `passwd=`)
-- API keys (`api_key=`, `token=`)
-- Bearer tokens (`Authorization: Bearer ...`)
-- Connection strings with embedded credentials
-
-Add custom patterns via `REDACTION_PATTERNS` (comma-separated regexes).
-
-## Privacy (LLM Data Filter)
-
-Configurable via the Settings > Privacy tab in the dashboard:
-- **PII Masking** — IPv4/IPv6 addresses, email, phone numbers, URLs, user paths, MAC addresses, credit card numbers
-- **Custom Patterns** — add your own regex patterns with named replacements
-- **Field Stripping** — optionally remove `host` and/or `program` fields before sending to LLM
-- **LLM Request Logging** — toggle whether LLM requests are logged to usage history
-- **Bulk Deletion** — delete events for a specified date range, protected by YES confirmation
-- **Purge AI Data** — clear all RAG chat history and/or LLM usage logs
-
-## Alerting Channels
-
-| Channel | Config keys | Notes |
-|---------|------------|-------|
-| **Webhook** | `url` | POST JSON payload to URL |
-| **Pushover** | `token_ref`, `user_key` | Priority mapped from severity |
-| **NTfy** | `base_url`, `topic`, `auth_header_ref?` | Topic should be unguessable |
-| **Gotify** | `base_url`, `token_ref` | App token from Gotify server |
-| **Telegram** | `token_ref`, `chat_id` | Bot API with MarkdownV2 formatting |
-
-All `*_ref` fields use `env:VAR_NAME` format to reference environment variables (secrets never stored in DB).
-
-## Security (OWASP Top 10)
-
-| Control | Implementation |
-|---------|---------------|
-| A01 Broken Access Control | API key auth on all endpoints; scope-based access (admin, read, ingest, dashboard) |
-| A02 Cryptographic Failures | Keys stored as SHA-256 hashes; secrets from env only |
-| A03 Injection | Parameterized queries via Knex; prompt sanitization |
-| A04 Insecure Design | Defense-in-depth; rate limiting; audit log |
-| A05 Security Misconfiguration | Secure headers (Helmet); non-root Docker; no default passwords |
-| A07 Auth Failures | Generic error messages; rate-limited; no key enumeration |
-| A09 Security Logging | Structured logs (Europe/Chisinau TZ); no secrets in logs |
-| A10 SSRF | URL validation on webhooks, connectors, notification channels |
-
-See [SECURITY_OWASP.md](./SECURITY_OWASP.md) for full details.
 
 ## Tech Stack
 
 | Component | Technology |
 |-----------|-----------|
 | Backend | Node.js 22, Fastify, TypeScript |
-| Database | PostgreSQL 14+, Knex.js migrations |
+| Database | PostgreSQL 14+ (partitioned), Knex.js migrations |
 | Frontend | React 19, Vite, TypeScript |
-| AI | OpenAI-compatible API (GPT-4o, etc.) |
-| Deployment | Docker, docker-compose |
-| Security | Helmet, CORS, rate limiting, SHA-256 key hashing |
+| AI | OpenAI-compatible API (GPT-4o-mini, GPT-4o, Ollama, etc.) |
+| Auth | bcrypt, SHA-256 session tokens, RBAC (20 permissions) |
+| Deployment | Docker, docker-compose, nginx |
+| Security | Helmet, CORS, rate limiting, immutable audit log |
+
+---
+
+## Installation Guide
+
+> **See [INSTALL.md](./INSTALL.md) for the complete step-by-step installation guide** covering Docker deployment, standalone installation, syslog forwarder setup, and log shipper integration.
+
+### Quick Start (Docker — recommended)
+
+```bash
+git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
+cd SyslogCollectorAI/docker
+cp .env.example .env
+# Edit .env with your PostgreSQL credentials and OpenAI API key
+docker compose build
+docker compose up -d
+```
+
+Open `http://your-server:8070` in your browser. Check the backend logs for your initial admin credentials:
+
+```bash
+docker logs docker-backend-1 2>&1 | grep -A 5 "BOOTSTRAP"
+```
+
+Log in with the displayed username and password. You will be prompted to change the password on first login.
+
+---
+
+## API Overview
+
+All endpoints require authentication via `Authorization: Bearer <session_token>` header or `X-API-Key` header.
+
+| Category | Endpoints | Description |
+|----------|-----------|-------------|
+| **Auth** | `POST /api/v1/auth/login`, `/logout`, `/me`, `/change-password` | Session-based authentication |
+| **Users** | `GET/POST/PUT/DELETE /api/v1/users` | User CRUD with role assignment |
+| **API Keys** | `GET/POST/PUT/DELETE /api/v1/api-keys` | Key management with scopes and IP allowlists |
+| **Audit Log** | `GET /api/v1/audit-log`, `/export` | Immutable audit trail with CSV/JSON export |
+| **Ingest** | `POST /api/v1/ingest` | Batch event ingestion (3 JSON formats) |
+| **Systems** | `GET/POST/PUT/DELETE /api/v1/systems` | Monitored system CRUD |
+| **Sources** | `GET/POST/PUT/DELETE /api/v1/sources` | Log source selector CRUD |
+| **Events** | `GET /api/v1/events/search`, `/facets`, `/trace` | Search, filter, cross-system trace |
+| **Dashboard** | `GET /api/v1/dashboard/systems` | Overview with scores |
+| **Scores** | `GET /api/v1/scores/systems`, `/stream` | Effective scores, SSE stream |
+| **Findings** | `GET /api/v1/systems/:id/findings` | AI findings with lifecycle |
+| **RAG** | `POST /api/v1/ask` | Natural language event queries |
+| **AI Config** | `GET/PUT /api/v1/ai-config`, `/ai-prompts` | Model and prompt configuration |
+| **Alerting** | CRUD `/api/v1/notification-channels`, `/notification-rules`, `/silences` | Notification management |
+| **Maintenance** | `GET/PUT /api/v1/maintenance-config`, `/backup/*` | DB maintenance and backup |
+| **Privacy** | `GET/PUT /api/v1/privacy-config` | PII masking configuration |
+
+---
 
 ## Project Documentation
 
 | Document | Contents |
 |----------|----------|
-| [PROJECT_INSTRUCTIONS.md](./PROJECT_INSTRUCTIONS.md) | User requirements |
+| [INSTALL.md](./INSTALL.md) | Complete installation and deployment guide |
 | [AI_ANALYSIS_SPEC.md](./AI_ANALYSIS_SPEC.md) | Scoring criteria, meta-analysis, dashboard spec |
 | [FEATURES_AND_INTEGRATIONS.md](./FEATURES_AND_INTEGRATIONS.md) | Connectors, notifications, feature spec |
-| [SECURITY_OWASP.md](./SECURITY_OWASP.md) | OWASP Top 10 mapping |
+| [SECURITY_OWASP.md](./SECURITY_OWASP.md) | OWASP Top 10 compliance mapping |
 
 ## License
 
