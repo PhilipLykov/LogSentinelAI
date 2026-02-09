@@ -114,6 +114,7 @@ export function computeNormalizedHash(event: NormalizedEvent): string {
     event.timestamp,
     event.message,
     event.host ?? '',
+    event.source_ip ?? '',
     event.service ?? '',
     event.program ?? '',
     event.facility ?? '',

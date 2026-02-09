@@ -297,6 +297,7 @@ export async function runPerEventScoringJob(
             message: truncateMessage(r.representativeMessage, opt.message_max_length),
             severity: event?.severity,
             host: event?.host,
+            source_ip: event?.source_ip,
             program: event?.program,
           };
           return filterEventForLlm(raw, privacyConfig);

@@ -186,15 +186,16 @@ export function filterText(text: string, config: PrivacyFilterConfig): string {
  * Returns a new object with filtered fields.
  */
 export function filterEventForLlm(
-  event: { message: string; severity?: string; host?: string; program?: string },
+  event: { message: string; severity?: string; host?: string; source_ip?: string; program?: string },
   config: PrivacyFilterConfig,
-): { message: string; severity?: string; host?: string; program?: string } {
+): { message: string; severity?: string; host?: string; source_ip?: string; program?: string } {
   if (!config.llm_filter_enabled) return event;
 
   return {
     message: filterText(event.message, config),
     severity: event.severity,
     host: config.strip_host_field ? undefined : (event.host ? filterText(event.host, config) : event.host),
+    source_ip: event.source_ip ? filterText(event.source_ip, config) : event.source_ip,
     program: config.strip_program_field ? undefined : (event.program ? filterText(event.program, config) : event.program),
   };
 }

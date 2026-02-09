@@ -8,6 +8,7 @@
   --text: #e4e6ef;
   --text-muted: #9ca0b8; /* Improved contrast: 5.1:1 on --bg */
   --accent: #818cf8;     /* Slightly lighter indigo for better contrast */
+  --primary: #818cf8;    /* Alias for accent — used by findings, tabs, badges */
   --green: #4ade80;      /* Lighter green for WCAG AA */
   --yellow: #facc15;     /* Lighter yellow for contrast */
   --orange: #fb923c;     /* Lighter orange for contrast */
