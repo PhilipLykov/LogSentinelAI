@@ -303,6 +303,24 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       }
     }
 
+    // Clean up stale windows whose events have all been deleted.
+    // This cascades to meta_results, effective_scores, and findings,
+    // preventing stale scores from lingering on the dashboard.
+    try {
+      const orphanedWindows = await db('windows')
+        .whereNotExists(
+          db('events')
+            .whereRaw(`events.system_id = windows.system_id AND events."timestamp" >= windows.from_ts AND events."timestamp" <= windows.to_ts`)
+            .select(db.raw('1')),
+        )
+        .del();
+      if (orphanedWindows > 0) {
+        console.log(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedWindows} orphaned analysis windows`);
+      }
+    } catch (err: any) {
+      errors.push(`Orphaned windows cleanup failed: ${err.message}`);
+    }
+
     // Also clean up orphaned message templates with no events
     try {
       const orphanedTemplates = await db('message_templates')

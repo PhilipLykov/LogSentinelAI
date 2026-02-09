@@ -1303,15 +1303,40 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           }
         }
 
+        // Also clean up stale aggregated data (windows -> meta_results, effective_scores,
+        // findings all CASCADE) so the dashboard doesn't show old scores for deleted events.
+        let windowsDeleted = 0;
+        try {
+          // Build a filter for windows that fall within the deleted time range
+          let windowQuery = db('windows');
+          if (from) windowQuery = windowQuery.where('from_ts', '>=', from);
+          if (to) windowQuery = windowQuery.where('to_ts', '<=', to);
+          if (system_id) windowQuery = windowQuery.where({ system_id });
+
+          const windowIds = await windowQuery.pluck('id');
+
+          if (windowIds.length > 0) {
+            // meta_results, effective_scores and findings CASCADE from windows
+            for (let i = 0; i < windowIds.length; i += 500) {
+              const chunk = windowIds.slice(i, i + 500);
+              const deleted = await db('windows').whereIn('id', chunk).del();
+              windowsDeleted += deleted;
+            }
+          }
+        } catch (cleanupErr: any) {
+          app.log.warn(`[${localTimestamp()}] Bulk delete: stale data cleanup warning: ${cleanupErr.message}`);
+        }
+
         app.log.info(
-          `[${localTimestamp()}] Bulk event deletion: ${totalEventsDeleted} events, ${totalScoresDeleted} scores deleted ` +
-          `(from=${from ?? 'any'}, to=${to ?? 'any'}, system_id=${system_id ?? 'all'})`,
+          `[${localTimestamp()}] Bulk event deletion: ${totalEventsDeleted} events, ${totalScoresDeleted} scores, ` +
+          `${windowsDeleted} windows deleted (from=${from ?? 'any'}, to=${to ?? 'any'}, system_id=${system_id ?? 'all'})`,
         );
 
         return reply.send({
           deleted_events: totalEventsDeleted,
           deleted_scores: totalScoresDeleted,
-          message: `Successfully deleted ${totalEventsDeleted} events and ${totalScoresDeleted} associated scores.`,
+          deleted_windows: windowsDeleted,
+          message: `Successfully deleted ${totalEventsDeleted} events, ${totalScoresDeleted} scores, and ${windowsDeleted} analysis windows.`,
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Bulk event deletion failed: ${err.message}`);

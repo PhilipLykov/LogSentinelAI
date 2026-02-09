@@ -1016,6 +1016,7 @@ export async function testPrivacyFilter(message: string): Promise<FilterTestResu
 export interface BulkDeleteResult {
   deleted_events: number;
   deleted_scores: number;
+  deleted_windows?: number;
   message: string;
 }
 
