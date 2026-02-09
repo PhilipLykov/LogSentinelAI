@@ -202,7 +202,7 @@ Return ONLY valid JSON with the "scores" array.`;
  * with per-criterion guidelines. Custom per-criterion overrides take
  * precedence over defaults.
  */
-export function buildScoringPrompt(criterionOverrides?: Record<string, string>): string {
+export function buildScoringPrompt(criterionOverrides?: Partial<Record<string, string>>): string {
   const guidelines: string[] = [];
   for (const slug of ['it_security', 'performance_degradation', 'failure_prediction', 'anomaly', 'compliance_audit', 'operational_risk']) {
     const guide = criterionOverrides?.[slug] ?? DEFAULT_CRITERION_GUIDELINES[slug] ?? '';
