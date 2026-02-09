@@ -1,5 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { type DashboardSystem, fetchDashboardSystems, getStoredApiKey, setApiKey } from './api';
+import {
+  type DashboardSystem,
+  type CurrentUser,
+  fetchDashboardSystems,
+  getStoredUser,
+  setStoredUser,
+  getStoredApiKey,
+  clearSession,
+  logout as apiLogout,
+  fetchCurrentUser,
+} from './api';
 import { SystemCard } from './components/SystemCard';
 import { DrillDown } from './components/DrillDown';
 import { LoginForm } from './components/LoginForm';
@@ -11,8 +21,17 @@ import './index.css';
 
 type View = 'dashboard' | 'settings' | 'ai-usage' | 'events';
 
+/** Check if user has a specific permission. */
+export function hasPermission(user: CurrentUser | null, perm: string): boolean {
+  if (!user) return false;
+  // Administrators get everything
+  if (user.role === 'administrator') return true;
+  return user.permissions?.includes(perm) ?? false;
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState(!!getStoredApiKey());
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(getStoredUser());
   const [view, setView] = useState<View>('dashboard');
   const [systems, setSystems] = useState<DashboardSystem[]>([]);
   const [selectedSystem, setSelectedSystem] = useState<DashboardSystem | null>(null);
@@ -20,13 +39,29 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
-  const fetchId = useRef(0); // Prevent stale fetch responses overwriting fresh data
+  const fetchId = useRef(0);
+
+  // Validate session and load user info on app load
+  useEffect(() => {
+    if (authenticated && !currentUser) {
+      fetchCurrentUser()
+        .then((res) => {
+          if (res.user) {
+            setCurrentUser(res.user);
+            setStoredUser(res.user);
+          }
+        })
+        .catch(() => {
+          // Session expired
+          clearSession();
+          setAuthenticated(false);
+          setCurrentUser(null);
+        });
+    }
+  }, [authenticated, currentUser]);
 
   const loadSystems = useCallback(async (isManual = false) => {
     const id = ++fetchId.current;
-
-    // Use functional setter to check if we need the full loading indicator
-    // (avoids depending on systems.length in the useCallback deps)
     setSystems((prev) => {
       if (prev.length === 0) setLoading(true);
       return prev;
@@ -38,25 +73,19 @@ export default function App() {
 
     try {
       const data = await fetchDashboardSystems();
-
-      // Prevent stale response from overwriting newer data
       if (id !== fetchId.current) return;
-
       setSystems(data);
       setLastRefreshed(new Date());
-
-      // Keep the selected system in sync with refreshed data
       setSelectedSystem((prev) => {
         if (!prev) return null;
         const updated = data.find((s) => s.id === prev.id);
-        return updated ?? null; // deselect if system was deleted
+        return updated ?? null;
       });
     } catch (err: unknown) {
       if (id !== fetchId.current) return;
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes('Authentication')) {
-        setAuthenticated(false);
-        setApiKey('');
+        handleLogout();
       }
       setError(message || 'Unknown error');
     } finally {
@@ -70,21 +99,20 @@ export default function App() {
   useEffect(() => {
     if (authenticated) {
       loadSystems();
-      // Auto-refresh every 30 seconds
       const interval = setInterval(() => loadSystems(), 30_000);
       return () => clearInterval(interval);
     }
   }, [authenticated, loadSystems]);
 
-  const handleLogin = () => {
+  const handleLogin = (user: CurrentUser) => {
+    setCurrentUser(user);
     setAuthenticated(true);
   };
 
-  // Memoized so child views using onAuthError in useCallback deps
-  // don't needlessly re-fetch when App re-renders (e.g. from auto-refresh).
-  const handleLogout = useCallback(() => {
-    setApiKey('');
+  const handleLogout = useCallback(async () => {
+    await apiLogout();
     setAuthenticated(false);
+    setCurrentUser(null);
     setSystems([]);
     setSelectedSystem(null);
     setLastRefreshed(null);
@@ -116,6 +144,17 @@ export default function App() {
     setSelectedSystem(null);
   };
 
+  // Permission checks for UI visibility
+  const canViewSettings = hasPermission(currentUser, 'systems:view') ||
+    hasPermission(currentUser, 'ai_config:view') ||
+    hasPermission(currentUser, 'users:manage') ||
+    hasPermission(currentUser, 'audit:view') ||
+    hasPermission(currentUser, 'api_keys:manage');
+  const canViewAiUsage = hasPermission(currentUser, 'ai_usage:view');
+
+  // Role label for display
+  const roleLabel = currentUser?.role?.replace(/_/g, ' ') ?? '';
+
   return (
     <div className="app">
       <header className="header">
@@ -140,22 +179,26 @@ export default function App() {
             >
               Events
             </button>
-            <button
-              className={`nav-tab${view === 'ai-usage' ? ' active' : ''}`}
-              onClick={switchToAiUsage}
-              role="tab"
-              aria-selected={view === 'ai-usage'}
-            >
-              AI Usage
-            </button>
-            <button
-              className={`nav-tab${view === 'settings' ? ' active' : ''}`}
-              onClick={switchToSettings}
-              role="tab"
-              aria-selected={view === 'settings'}
-            >
-              Settings
-            </button>
+            {canViewAiUsage && (
+              <button
+                className={`nav-tab${view === 'ai-usage' ? ' active' : ''}`}
+                onClick={switchToAiUsage}
+                role="tab"
+                aria-selected={view === 'ai-usage'}
+              >
+                AI Usage
+              </button>
+            )}
+            {canViewSettings && (
+              <button
+                className={`nav-tab${view === 'settings' ? ' active' : ''}`}
+                onClick={switchToSettings}
+                role="tab"
+                aria-selected={view === 'settings'}
+              >
+                Settings
+              </button>
+            )}
           </nav>
         </div>
         <div className="header-actions">
@@ -174,6 +217,14 @@ export default function App() {
               {refreshing ? '↻' : 'Refresh'}
             </button>
           )}
+          {currentUser && (
+            <span className="user-info" style={{ fontSize: '0.85em', color: 'var(--muted)', marginRight: '0.5rem' }}>
+              {currentUser.display_name || currentUser.username}
+              <span style={{ fontSize: '0.75em', opacity: 0.7, marginLeft: '0.3rem' }}>
+                ({roleLabel})
+              </span>
+            </span>
+          )}
           <button className="btn btn-sm btn-outline" onClick={handleLogout}>
             Logout
           </button>
@@ -187,12 +238,13 @@ export default function App() {
       ) : view === 'ai-usage' ? (
         <LlmUsageView onAuthError={handleLogout} />
       ) : view === 'settings' ? (
-        <SettingsView onAuthError={handleLogout} />
+        <SettingsView onAuthError={handleLogout} currentUser={currentUser} />
       ) : selectedSystem ? (
         <DrillDown
           system={selectedSystem}
           onBack={() => setSelectedSystem(null)}
           onAuthError={handleLogout}
+          currentUser={currentUser}
         />
       ) : (
         <>
@@ -223,12 +275,12 @@ export default function App() {
                 system={s}
                 onClick={() => setSelectedSystem(s)}
                 onAuthError={handleLogout}
+                currentUser={currentUser}
               />
             ))}
           </div>
 
-          {/* Ask AI — global context across all systems */}
-          {systems.length > 0 && (
+          {systems.length > 0 && hasPermission(currentUser, 'rag:use') && (
             <AskAiPanel
               systems={systems}
               onAuthError={handleLogout}

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   type MonitoredSystem,
   type LogSource,
+  type CurrentUser,
   fetchSystems,
   fetchSources,
   createSystem,
@@ -18,12 +19,17 @@ import { AiConfigSection } from './AiConfigSection';
 import { NotificationsSection } from './NotificationsSection';
 import { DatabaseMaintenanceSection } from './DatabaseMaintenanceSection';
 import { PrivacySection } from './PrivacySection';
+import { UserManagementSection } from './UserManagementSection';
+import { ApiKeyManagementSection } from './ApiKeyManagementSection';
+import { AuditLogSection } from './AuditLogSection';
+import { hasPermission } from '../App';
 
 interface SettingsViewProps {
   onAuthError: () => void;
+  currentUser?: CurrentUser | null;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'privacy';
+type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'privacy' | 'users' | 'api-keys' | 'audit-log';
 
 type Modal =
   | { kind: 'create-system' }
@@ -34,8 +40,21 @@ type Modal =
   | { kind: 'delete-source'; source: LogSource }
   | null;
 
-export function SettingsView({ onAuthError }: SettingsViewProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('systems');
+function getDefaultTab(user: CurrentUser | null | undefined): SettingsTab {
+  const hp = (perm: string) => hasPermission(user ?? null, perm);
+  if (hp('systems:view')) return 'systems';
+  if (hp('ai_config:view')) return 'ai-model';
+  if (hp('notifications:view')) return 'notifications';
+  if (hp('database:view')) return 'database';
+  if (hp('privacy:view')) return 'privacy';
+  if (hp('users:manage')) return 'users';
+  if (hp('api_keys:manage')) return 'api-keys';
+  if (hp('audit:view')) return 'audit-log';
+  return 'systems'; // fallback
+}
+
+export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => getDefaultTab(currentUser));
   const [systems, setSystems] = useState<MonitoredSystem[]>([]);
   const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
   const [sources, setSources] = useState<LogSource[]>([]);
@@ -207,46 +226,86 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
     <div className="settings-view">
       {/* ── Sub-navigation tabs ── */}
       <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-        <button
-          className={`settings-tab${activeTab === 'systems' ? ' active' : ''}`}
-          onClick={() => setActiveTab('systems')}
-          role="tab"
-          aria-selected={activeTab === 'systems'}
-        >
-          Systems &amp; Sources
-        </button>
-        <button
-          className={`settings-tab${activeTab === 'ai-model' ? ' active' : ''}`}
-          onClick={() => setActiveTab('ai-model')}
-          role="tab"
-          aria-selected={activeTab === 'ai-model'}
-        >
-          AI Model
-        </button>
-        <button
-          className={`settings-tab${activeTab === 'notifications' ? ' active' : ''}`}
-          onClick={() => setActiveTab('notifications')}
-          role="tab"
-          aria-selected={activeTab === 'notifications'}
-        >
-          Notifications
-        </button>
-        <button
-          className={`settings-tab${activeTab === 'database' ? ' active' : ''}`}
-          onClick={() => setActiveTab('database')}
-          role="tab"
-          aria-selected={activeTab === 'database'}
-        >
-          Database
-        </button>
-        <button
-          className={`settings-tab${activeTab === 'privacy' ? ' active' : ''}`}
-          onClick={() => setActiveTab('privacy')}
-          role="tab"
-          aria-selected={activeTab === 'privacy'}
-        >
-          Privacy
-        </button>
+        {hasPermission(currentUser ?? null, 'systems:view') && (
+          <button
+            className={`settings-tab${activeTab === 'systems' ? ' active' : ''}`}
+            onClick={() => setActiveTab('systems')}
+            role="tab"
+            aria-selected={activeTab === 'systems'}
+          >
+            Systems &amp; Sources
+          </button>
+        )}
+        {hasPermission(currentUser ?? null, 'ai_config:view') && (
+          <button
+            className={`settings-tab${activeTab === 'ai-model' ? ' active' : ''}`}
+            onClick={() => setActiveTab('ai-model')}
+            role="tab"
+            aria-selected={activeTab === 'ai-model'}
+          >
+            AI Model
+          </button>
+        )}
+        {hasPermission(currentUser ?? null, 'notifications:view') && (
+          <button
+            className={`settings-tab${activeTab === 'notifications' ? ' active' : ''}`}
+            onClick={() => setActiveTab('notifications')}
+            role="tab"
+            aria-selected={activeTab === 'notifications'}
+          >
+            Notifications
+          </button>
+        )}
+        {hasPermission(currentUser ?? null, 'database:view') && (
+          <button
+            className={`settings-tab${activeTab === 'database' ? ' active' : ''}`}
+            onClick={() => setActiveTab('database')}
+            role="tab"
+            aria-selected={activeTab === 'database'}
+          >
+            Database
+          </button>
+        )}
+        {hasPermission(currentUser ?? null, 'privacy:view') && (
+          <button
+            className={`settings-tab${activeTab === 'privacy' ? ' active' : ''}`}
+            onClick={() => setActiveTab('privacy')}
+            role="tab"
+            aria-selected={activeTab === 'privacy'}
+          >
+            Privacy
+          </button>
+        )}
+        {hasPermission(currentUser ?? null, 'users:manage') && (
+          <button
+            className={`settings-tab${activeTab === 'users' ? ' active' : ''}`}
+            onClick={() => setActiveTab('users')}
+            role="tab"
+            aria-selected={activeTab === 'users'}
+          >
+            Users
+          </button>
+        )}
+        {hasPermission(currentUser ?? null, 'api_keys:manage') && (
+          <button
+            className={`settings-tab${activeTab === 'api-keys' ? ' active' : ''}`}
+            onClick={() => setActiveTab('api-keys')}
+            role="tab"
+            aria-selected={activeTab === 'api-keys'}
+          >
+            API Keys
+          </button>
+        )}
+        {hasPermission(currentUser ?? null, 'audit:view') && (
+          <button
+            className={`settings-tab${activeTab === 'audit-log' ? ' active' : ''}`}
+            onClick={() => setActiveTab('audit-log')}
+            role="tab"
+            aria-selected={activeTab === 'audit-log'}
+          >
+            Audit Log
+          </button>
+        )}
       </div>
 
       {/* ── Tab content ── */}
@@ -258,6 +317,12 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
         <DatabaseMaintenanceSection onAuthError={onAuthError} />
       ) : activeTab === 'privacy' ? (
         <PrivacySection onAuthError={onAuthError} />
+      ) : activeTab === 'users' ? (
+        <UserManagementSection onAuthError={onAuthError} />
+      ) : activeTab === 'api-keys' ? (
+        <ApiKeyManagementSection onAuthError={onAuthError} />
+      ) : activeTab === 'audit-log' ? (
+        <AuditLogSection onAuthError={onAuthError} />
       ) : (
         /* ── Systems & Sources tab (existing content) ── */
         <>

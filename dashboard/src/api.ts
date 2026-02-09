@@ -1,26 +1,68 @@
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
-function getApiKey(): string {
-  return localStorage.getItem('apiKey') ?? '';
+// ── Session / Auth token management ──────────────────────────
+
+function getSessionToken(): string {
+  return localStorage.getItem('sessionToken') ?? '';
 }
 
-export function setApiKey(key: string): void {
-  localStorage.setItem('apiKey', key);
+export function setSessionToken(token: string): void {
+  localStorage.setItem('sessionToken', token);
+}
+
+export function clearSession(): void {
+  localStorage.removeItem('sessionToken');
+  localStorage.removeItem('currentUser');
+  // Also clear legacy API key if present
+  localStorage.removeItem('apiKey');
 }
 
 export function getStoredApiKey(): string {
-  return getApiKey();
+  // Backward compat: check for session token first, then legacy API key
+  return getSessionToken() || (localStorage.getItem('apiKey') ?? '');
+}
+
+export function setApiKey(key: string): void {
+  // Now stores as session token
+  setSessionToken(key);
+}
+
+/** Current user info stored in localStorage for quick access. */
+export interface CurrentUser {
+  id: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  role: string;
+  must_change_password: boolean;
+  permissions: string[];
+}
+
+export function getStoredUser(): CurrentUser | null {
+  try {
+    const raw = localStorage.getItem('currentUser');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredUser(user: CurrentUser): void {
+  localStorage.setItem('currentUser', JSON.stringify(user));
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getSessionToken();
   const headers: Record<string, string> = {
-    'X-API-Key': getApiKey(),
-    ...init?.headers as Record<string, string>,
+    ...(init?.headers as Record<string, string>),
   };
 
+  // Use Bearer token for session auth, X-API-Key for legacy
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   // Only set Content-Type when there is actually a body to send.
-  // Sending Content-Type: application/json with no body causes Fastify to
-  // attempt JSON parsing on an empty payload, resulting in a 400 error.
   if (init?.body) {
     headers['Content-Type'] = 'application/json';
   }
@@ -46,6 +88,214 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return res.json() as Promise<T>;
+}
+
+// ── Authentication API ───────────────────────────────────────
+
+export interface LoginResponse {
+  token: string;
+  expires_at: string;
+  user: CurrentUser;
+}
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${BASE_URL}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error ?? `Login failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await apiFetch('/api/v1/auth/logout', { method: 'POST' });
+  } catch {
+    // Ignore errors — we're logging out anyway
+  }
+  clearSession();
+}
+
+export async function fetchCurrentUser(): Promise<{ user?: CurrentUser; api_key?: { id: string; name: string; scope: string; permissions: string[] } }> {
+  return apiFetch('/api/v1/auth/me');
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<{ message: string }> {
+  return apiFetch('/api/v1/auth/change-password', {
+    method: 'PUT',
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}
+
+// ── User Management API ──────────────────────────────────────
+
+export interface UserInfo {
+  id: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  role: string;
+  is_active: boolean;
+  must_change_password: boolean;
+  last_login_at: string | null;
+  failed_login_count: number;
+  locked_until: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export async function fetchUsers(): Promise<UserInfo[]> {
+  return apiFetch('/api/v1/users');
+}
+
+export async function createUser(data: {
+  username: string;
+  password: string;
+  display_name?: string;
+  email?: string;
+  role?: string;
+  must_change_password?: boolean;
+}): Promise<UserInfo> {
+  return apiFetch('/api/v1/users', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateUser(id: string, data: {
+  display_name?: string;
+  email?: string;
+  role?: string;
+}): Promise<UserInfo> {
+  return apiFetch(`/api/v1/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+export async function resetUserPassword(id: string, newPassword: string): Promise<{ message: string }> {
+  return apiFetch(`/api/v1/users/${id}/reset-password`, { method: 'PUT', body: JSON.stringify({ new_password: newPassword }) });
+}
+
+export async function toggleUserActive(id: string): Promise<UserInfo> {
+  return apiFetch(`/api/v1/users/${id}/toggle-active`, { method: 'PUT' });
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  return apiFetch(`/api/v1/users/${id}`, { method: 'DELETE' });
+}
+
+// ── API Key Management API ───────────────────────────────────
+
+export interface ApiKeyInfo {
+  id: string;
+  name: string;
+  scope: string;
+  description: string | null;
+  created_by: string | null;
+  created_by_username: string | null;
+  expires_at: string | null;
+  last_used_at: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface CreateApiKeyResponse {
+  id: string;
+  name: string;
+  scope: string;
+  plain_key: string;
+  description: string | null;
+  expires_at: string | null;
+  created_at: string;
+  message: string;
+}
+
+export async function fetchApiKeys(): Promise<ApiKeyInfo[]> {
+  return apiFetch('/api/v1/api-keys');
+}
+
+export async function createApiKey(data: {
+  name: string;
+  scope: string;
+  description?: string;
+  expires_at?: string;
+}): Promise<CreateApiKeyResponse> {
+  return apiFetch('/api/v1/api-keys', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateApiKey(id: string, data: {
+  name?: string;
+  scope?: string;
+  description?: string;
+  expires_at?: string | null;
+  is_active?: boolean;
+}): Promise<ApiKeyInfo> {
+  return apiFetch(`/api/v1/api-keys/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+export async function revokeApiKey(id: string): Promise<{ message: string }> {
+  return apiFetch(`/api/v1/api-keys/${id}`, { method: 'DELETE' });
+}
+
+// ── Audit Log API ────────────────────────────────────────────
+
+export interface AuditLogEntry {
+  id: string;
+  at: string;
+  actor: string | null;
+  user_id: string | null;
+  session_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
+  ip: string | null;
+}
+
+export interface AuditLogResponse {
+  items: AuditLogEntry[];
+  page: number;
+  limit: number;
+  total: number;
+  total_pages: number;
+}
+
+export async function fetchAuditLog(params?: {
+  page?: number;
+  limit?: number;
+  action?: string;
+  resource_type?: string;
+  actor?: string;
+  user_id?: string;
+  from?: string;
+  to?: string;
+  search?: string;
+}): Promise<AuditLogResponse> {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.action) qs.set('action', params.action);
+  if (params?.resource_type) qs.set('resource_type', params.resource_type);
+  if (params?.actor) qs.set('actor', params.actor);
+  if (params?.user_id) qs.set('user_id', params.user_id);
+  if (params?.from) qs.set('from', params.from);
+  if (params?.to) qs.set('to', params.to);
+  if (params?.search) qs.set('search', params.search);
+  return apiFetch(`/api/v1/audit-log?${qs}`);
+}
+
+export async function fetchAuditLogActions(): Promise<{ actions: string[]; resource_types: string[] }> {
+  return apiFetch('/api/v1/audit-log/actions');
+}
+
+export function getAuditExportUrl(params?: { format?: string; from?: string; to?: string }): string {
+  const qs = new URLSearchParams();
+  if (params?.format) qs.set('format', params.format);
+  if (params?.from) qs.set('from', params.from);
+  if (params?.to) qs.set('to', params.to);
+  return `${BASE_URL}/api/v1/audit-log/export?${qs}`;
 }
 
 // ── Types ────────────────────────────────────────────────────
@@ -973,7 +1223,7 @@ export function getBackupDownloadUrl(filename: string): string {
 }
 
 export function getApiKeyForDownload(): string {
-  return getApiKey();
+  return getSessionToken();
 }
 
 export async function deleteBackup(filename: string): Promise<{ deleted: boolean; filename: string }> {
@@ -1073,29 +1323,31 @@ export async function purgeLlmUsage(confirmation: string): Promise<{ deleted: nu
 }
 
 /**
- * Validate an API key against the backend.
+ * Validate a session token by calling /auth/me.
  * Returns true if valid, false if 401/403.
- * Throws on network errors so callers can distinguish "bad key" from "server unreachable".
  */
-export async function validateApiKey(key: string): Promise<boolean> {
-  const res = await fetch(`${BASE_URL}/api/v1/dashboard/systems`, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': key,
-    },
-  });
-  return res.ok;
+export async function validateSession(): Promise<boolean> {
+  const token = getSessionToken();
+  if (!token) return false;
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/auth/me`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Create an SSE connection for real-time score updates.
- * Note: EventSource does not support custom headers, so the API key is passed
- * as a query parameter. In production, consider using a session-based approach
- * or a custom EventSource polyfill with header support.
+ * EventSource does not support custom headers, so we pass the session token
+ * as a query parameter. The backend accepts both `key=` (API key) and Bearer tokens.
  */
 export function createScoreStream(onMessage: (data: unknown) => void): EventSource {
   const url = `${BASE_URL}/api/v1/scores/stream`;
-  const es = new EventSource(`${url}?key=${encodeURIComponent(getApiKey())}`);
+  const token = getSessionToken();
+  const es = new EventSource(`${url}?key=${encodeURIComponent(token)}`);
   es.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);

@@ -16,6 +16,7 @@ import {
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
+import { hasPermission } from '../App';
 
 /** Auto-refresh interval for findings (ms). */
 const FINDINGS_POLL_INTERVAL = 60_000; // 60 seconds
@@ -24,9 +25,10 @@ interface DrillDownProps {
   system: DashboardSystem;
   onBack: () => void;
   onAuthError: () => void;
+  currentUser?: import('../api').CurrentUser | null;
 }
 
-export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
+export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDownProps) {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [meta, setMeta] = useState<MetaResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -268,14 +270,16 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
           )}
         </div>
         <div className="dd-top-actions">
-          <button
-            className="btn btn-sm btn-danger"
-            onClick={handleAckAllEvents}
-            disabled={bulkAcking}
-            title="Acknowledge all events for this system up to now"
-          >
-            {bulkAcking ? '...' : 'Ack All Events'}
-          </button>
+          {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+            <button
+              className="btn btn-sm btn-danger"
+              onClick={handleAckAllEvents}
+              disabled={bulkAcking}
+              title="Acknowledge all events for this system up to now"
+            >
+              {bulkAcking ? '...' : 'Ack All Events'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -403,11 +407,13 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
       )}
 
       {/* ── Ask AI (system-scoped) ── */}
-      <AskAiPanel
-        fixedSystemId={system.id}
-        fixedSystemName={system.name}
-        onAuthError={onAuthError}
-      />
+      {hasPermission(currentUser ?? null, 'rag:use') && (
+        <AskAiPanel
+          fixedSystemId={system.id}
+          fixedSystemName={system.name}
+          onAuthError={onAuthError}
+        />
+      )}
 
       {/* ── Persistent Findings panel ── */}
       {!loading && (
@@ -434,7 +440,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                 Resolved{resolvedFindings.length > 0 && <span className="findings-tab-count">{resolvedFindings.length}</span>}
               </button>
             </div>
-            {findingsTab === 'open' && openFindings.length > 0 && (
+            {findingsTab === 'open' && openFindings.length > 0 && hasPermission(currentUser ?? null, 'events:acknowledge') && (
               <button
                 className="btn btn-xs btn-ack"
                 onClick={handleAckAllFindings}
@@ -502,7 +508,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                     </div>
                     <p className="finding-text">{f.text}</p>
                     <div className="finding-card-actions">
-                      {f.status === 'open' && (
+                      {f.status === 'open' && hasPermission(currentUser ?? null, 'events:acknowledge') && (
                         <button
                           className="btn btn-xs btn-ack"
                           onClick={() => handleAcknowledge(f.id)}
@@ -516,13 +522,15 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                           <span className="finding-acked-info">
                             Ack&apos;d {f.acknowledged_at ? safeDate(f.acknowledged_at) : ''}
                           </span>
-                          <button
-                            className="btn btn-xs btn-outline"
-                            onClick={() => handleReopen(f.id)}
-                            disabled={ackingId === f.id}
-                          >
-                            Reopen
-                          </button>
+                          {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+                            <button
+                              className="btn btn-xs btn-outline"
+                              onClick={() => handleReopen(f.id)}
+                              disabled={ackingId === f.id}
+                            >
+                              Reopen
+                            </button>
+                          )}
                         </>
                       )}
                       {f.status === 'resolved' && f.resolved_at && (

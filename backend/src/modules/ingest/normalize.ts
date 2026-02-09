@@ -87,10 +87,14 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     ? { ...(incomingRaw ?? {}), ...(hasExtras ? extras : {}) }
     : undefined;
 
+  // Content-based severity enrichment: upgrade if message body
+  // indicates a higher severity than the syslog header provided.
+  const enrichedSeverity = enrichSeverityFromContent(message.trim(), severity);
+
   return {
     timestamp,
     message: message.trim(),
-    severity: severity ?? undefined,
+    severity: enrichedSeverity ?? undefined,
     host: stringField(entry, 'host', 'hostname', 'source'),
     source_ip: stringField(entry, 'source_ip', 'fromhost_ip', 'fromhost-ip', 'ip', 'client_ip', 'src_ip'),
     service: stringField(entry, 'service', 'service_name', 'application'),
@@ -145,4 +149,137 @@ function syslogSeverityToString(n: number): string {
     4: 'warning', 5: 'notice', 6: 'info', 7: 'debug',
   };
   return map[n] ?? 'info';
+}
+
+// ── Content-based severity enrichment ────────────────────────
+
+/**
+ * Severity priority (lower = more severe).  Matches RFC 5424.
+ */
+const SEVERITY_PRIORITY: Record<string, number> = {
+  emergency: 0, emerg: 0,
+  alert: 1,
+  critical: 2, crit: 2,
+  error: 3, err: 3,
+  warning: 4, warn: 4,
+  notice: 5,
+  info: 6, informational: 6,
+  debug: 7,
+};
+
+/**
+ * Patterns that indicate a specific severity when found in the message body.
+ * Ordered from most severe to least.  Each regex is tested case-insensitively.
+ *
+ * Categories of patterns:
+ *  1. Structured log fields (key=value, key="value", JSON-like)
+ *  2. Common log-line prefixes / tags
+ *  3. Keyword heuristics (conservative — only strong signals)
+ */
+const CONTENT_SEVERITY_RULES: { severity: string; patterns: RegExp[] }[] = [
+  // ── Emergency / Alert / Critical ────────────────────
+  {
+    severity: 'emergency',
+    patterns: [
+      /\blevel\s*[=:]\s*"?(?:emergency|emerg)\b/i,
+      /\b(?:EMERGENCY|EMERG)\s*[:\]|]/,
+    ],
+  },
+  {
+    severity: 'alert',
+    patterns: [
+      /\blevel\s*[=:]\s*"?alert\b/i,
+      /\bALERT\s*[:\]|]/,
+    ],
+  },
+  {
+    severity: 'critical',
+    patterns: [
+      /\blevel\s*[=:]\s*"?(?:critical|crit|fatal)\b/i,
+      /\b(?:CRITICAL|CRIT|FATAL)\s*[:\]|]/,
+      /\bpanic:/i,
+      /\bkernel\s+panic\b/i,
+      /\bout of memory\b/i,
+    ],
+  },
+  // ── Error ───────────────────────────────────────────
+  {
+    severity: 'error',
+    patterns: [
+      // Structured: level=error, level="error", "level":"error"
+      /\blevel\s*[=:]\s*"?(?:error|err)\b/i,
+      // JSON-style: "severity":"error"
+      /"(?:severity|level)"\s*:\s*"(?:error|err)"/i,
+      // Log-line prefix:  ERROR: ..., [ERROR] ..., <error> ...
+      /\bERROR\s*[:\]|>]/,
+      // Common message-start pattern: "error: ..."
+      // (only at word boundary + colon to avoid false positives)
+      /\berror:/i,
+      // Systemd / service failures
+      /\bfailed with result\b/i,
+      /\breturn(?:ed)? (?:non-zero|error|failure)\b/i,
+      /\bsegmentation fault\b/i,
+      /\bsegfault\b/i,
+      /\bcore dumped\b/i,
+      // Common exit-code failure patterns
+      /\bexit(?:ed)?\s+(?:code|status)\s*[=:]?\s*[1-9]\d*/i,
+    ],
+  },
+  // ── Warning ─────────────────────────────────────────
+  {
+    severity: 'warning',
+    patterns: [
+      /\blevel\s*[=:]\s*"?(?:warning|warn)\b/i,
+      /"(?:severity|level)"\s*:\s*"(?:warning|warn)"/i,
+      /\bWARN(?:ING)?\s*[:\]|>]/,
+      /\bwarning:/i,
+      // Deprecation warnings
+      /\bdeprecated\b/i,
+      // Restart / retry hints
+      /\bwill not be restarted\b/i,
+      /\bretry(?:ing)?\s+(?:in|after)\b/i,
+      /\bShouldRestart failed\b/i,
+    ],
+  },
+];
+
+/**
+ * Detect severity from message content and return the more severe
+ * of (header severity, content severity).  Never downgrades.
+ *
+ * @param message  - The (trimmed) event message body.
+ * @param headerSeverity - Severity from the syslog header (already lowercase), or undefined.
+ * @returns The enriched severity string, or the original if no upgrade.
+ */
+function enrichSeverityFromContent(
+  message: string,
+  headerSeverity: string | undefined,
+): string | undefined {
+  const headerPriority = headerSeverity
+    ? (SEVERITY_PRIORITY[headerSeverity] ?? 6)  // default to "info" if unknown
+    : 7; // if no header severity, treat as lowest (debug)
+
+  let bestContentPriority = Infinity;
+  let bestContentSeverity: string | undefined;
+
+  for (const rule of CONTENT_SEVERITY_RULES) {
+    const rulePriority = SEVERITY_PRIORITY[rule.severity] ?? 6;
+    // Skip if this rule can't beat what we already have
+    if (rulePriority >= bestContentPriority) continue;
+
+    for (const pattern of rule.patterns) {
+      if (pattern.test(message)) {
+        bestContentPriority = rulePriority;
+        bestContentSeverity = rule.severity;
+        break; // no need to test more patterns for this severity
+      }
+    }
+  }
+
+  // Only upgrade — never downgrade
+  if (bestContentSeverity && bestContentPriority < headerPriority) {
+    return bestContentSeverity;
+  }
+
+  return headerSeverity;
 }

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createReadStream, statSync } from 'node:fs';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { generateComplianceExport, type ExportParams } from './exportCompliance.js';
 import { askQuestion } from './rag.js';
@@ -19,6 +20,7 @@ import {
   BACKUP_CONFIG_DEFAULTS,
 } from '../maintenance/backupJob.js';
 import { PRIVACY_FILTER_DEFAULTS, invalidatePrivacyFilterCache } from '../llm/llmPrivacyFilter.js';
+import { writeAuditLog } from '../../middleware/audit.js';
 
 /**
  * Phase 7 feature routes: compliance export, RAG query, app config,
@@ -30,7 +32,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   // ── Compliance export ──────────────────────────────────────
   app.post<{ Body: ExportParams }>(
     '/api/v1/export/compliance',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.COMPLIANCE_EXPORT) },
     async (request, reply) => {
       const { type, system_ids, from, to } = request.body ?? {} as any;
 
@@ -66,7 +68,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   // ── RAG query ──────────────────────────────────────────────
   app.post<{ Body: { question: string; system_id?: string; from?: string; to?: string } }>(
     '/api/v1/ask',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.RAG_USE) },
     async (request, reply) => {
       const { question, system_id, from, to } = request.body ?? {} as any;
 
@@ -119,7 +121,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/ask/history — list persisted Q&A entries */
   app.get<{ Querystring: { system_id?: string; limit?: string } }>(
     '/api/v1/ask/history',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.RAG_USE) },
     async (request, reply) => {
       const { system_id } = request.query;
       const rawLimit = Number(request.query.limit ?? 50);
@@ -151,7 +153,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** DELETE /api/v1/ask/history — clear all or system-scoped history */
   app.delete<{ Querystring: { system_id?: string } }>(
     '/api/v1/ask/history',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.PRIVACY_MANAGE) },
     async (request, reply) => {
       const { system_id } = request.query;
 
@@ -165,6 +167,16 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           query = query.where({ system_id });
         }
         const deleted = await query.del();
+
+        await writeAuditLog(db, {
+          action: 'rag_history_delete',
+          resource_type: 'rag_history',
+          details: { deleted, system_id: system_id ?? null },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] RAG history cleared: ${deleted} entries${system_id ? ` (system ${system_id})` : ''}`);
         return reply.send({ deleted });
       } catch (err: any) {
@@ -177,7 +189,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   // ── App config (get/set) ───────────────────────────────────
   app.get(
     '/api/v1/config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
     async (_req, reply) => {
       const rows = await db('app_config').select('*');
       const config: Record<string, unknown> = {};
@@ -194,7 +206,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
   app.put<{ Body: { key: string; value: unknown } }>(
     '/api/v1/config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const { key, value } = request.body ?? {} as any;
 
@@ -207,6 +219,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
       `, [key, JSON.stringify(value)]);
 
+      await writeAuditLog(db, {
+        action: 'config_update',
+        resource_type: 'app_config',
+        details: { key },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       return reply.send({ key, value });
     },
   );
@@ -214,7 +235,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   // ── AI configuration (model, base URL, API key) ────────────
   app.get(
     '/api/v1/ai-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
     async (_req, reply) => {
       const cfg = await resolveAiConfig(db);
 
@@ -249,7 +270,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
   app.put(
     '/api/v1/ai-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const body = request.body as any ?? {};
       const { model, base_url, api_key } = body;
@@ -314,6 +335,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       // Flush cache so next pipeline run picks up new values
       invalidateAiConfigCache();
 
+      await writeAuditLog(db, {
+        action: 'ai_config_update',
+        resource_type: 'ai_config',
+        details: { fields: updates.map(u => u.key) },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       app.log.info(`[${localTimestamp()}] AI config updated (fields: ${updates.map(u => u.key).join(', ')})`);
 
       // Return the updated config (safe summary)
@@ -340,7 +370,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
    */
   app.get(
     '/api/v1/ai-prompts',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
     async (_req, reply) => {
       const custom = await resolveCustomPrompts(db);
 
@@ -364,7 +394,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
    */
   app.put(
     '/api/v1/ai-prompts',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const body = request.body as any ?? {};
       const { scoring_system_prompt, meta_system_prompt, rag_system_prompt } = body;
@@ -410,6 +440,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       // Flush cache
       invalidateAiConfigCache();
 
+      await writeAuditLog(db, {
+        action: 'prompt_update',
+        resource_type: 'ai_prompts',
+        details: { fields: promptFields.filter(f => f.val !== undefined).map(f => f.key) },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       app.log.info(`[${localTimestamp()}] AI system prompts updated`);
 
       // Return updated state
@@ -442,7 +481,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
    */
   app.get(
     '/api/v1/ai-prompts/criterion-guidelines',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
     async (_req, reply) => {
       const overrides = await resolveCriterionGuidelines(db);
 
@@ -481,7 +520,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
    */
   app.put(
     '/api/v1/ai-prompts/criterion-guidelines',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const body = request.body as Record<string, string | null | undefined> ?? {};
 
@@ -523,6 +562,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       invalidateAiConfigCache();
       invalidateCriterionGuidelinesCache();
 
+      await writeAuditLog(db, {
+        action: 'guideline_update',
+        resource_type: 'ai_prompts',
+        details: { criteria: updates.map(u => u.slug) },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       app.log.info(`[${localTimestamp()}] Criterion scoring guidelines updated: ${updates.map((u) => u.slug).join(', ')}`);
 
       // Return updated state (same shape as GET)
@@ -553,7 +601,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   // ── Cost visibility ────────────────────────────────────────
   app.get<{ Querystring: { from?: string; to?: string; system_id?: string; group_by?: string } }>(
     '/api/v1/costs',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_USAGE_VIEW) },
     async (request, reply) => {
       const { from, to, system_id, group_by } = request.query;
 
@@ -615,7 +663,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/token-optimization — return current config with defaults. */
   app.get(
     '/api/v1/token-optimization',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
     async (_req, reply) => {
       try {
         const row = await db('app_config').where({ key: 'token_optimization' }).first('value');
@@ -652,7 +700,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** PUT /api/v1/token-optimization — update config with validation. */
   app.put(
     '/api/v1/token-optimization',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const body = (request.body as any) ?? {};
 
@@ -724,6 +772,14 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         `, [JSON.stringify(current)]);
 
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'token_optimization',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] Token optimization config updated`);
 
         return reply.send({ config: current, defaults: TOKEN_OPT_DEFAULTS });
@@ -737,7 +793,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** POST /api/v1/token-optimization/invalidate-cache — clear all template score caches. */
   app.post(
     '/api/v1/token-optimization/invalidate-cache',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (_req, reply) => {
       try {
         const result = await db('message_templates')
@@ -746,6 +802,16 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
             last_scored_at: null,
             cached_scores: null,
           });
+
+        await writeAuditLog(db, {
+          action: 'cache_invalidate',
+          resource_type: 'score_cache',
+          details: { cleared: result },
+          ip: _req.ip,
+          user_id: _req.currentUser?.id,
+          session_id: _req.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] Score cache invalidated: ${result} templates cleared`);
         return reply.send({ cleared: result });
       } catch (err: any) {
@@ -770,7 +836,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/meta-analysis-config — return current config with defaults and stats. */
   app.get(
     '/api/v1/meta-analysis-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
     async (_req, reply) => {
       try {
         const row = await db('app_config').where({ key: 'meta_analysis_config' }).first('value');
@@ -814,7 +880,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** PUT /api/v1/meta-analysis-config — update config with validation. */
   app.put(
     '/api/v1/meta-analysis-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const body = (request.body as any) ?? {};
 
@@ -872,6 +938,14 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         `, [JSON.stringify(current)]);
 
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'meta_analysis_config',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] Meta-analysis config updated`);
 
         return reply.send({ config: current, defaults: META_CONFIG_DEFAULTS });
@@ -892,7 +966,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/maintenance-config — current maintenance settings and per-system retention. */
   app.get(
     '/api/v1/maintenance-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_VIEW) },
     async (_req, reply) => {
       try {
         const cfg = await loadMaintenanceConfig(db);
@@ -941,7 +1015,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** PUT /api/v1/maintenance-config — update global maintenance settings. */
   app.put(
     '/api/v1/maintenance-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_MANAGE) },
     async (request, reply) => {
       const body = (request.body as any) ?? {};
 
@@ -974,6 +1048,14 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           `, [JSON.stringify(body.maintenance_interval_hours)]);
         }
 
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'maintenance_config',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] Maintenance config updated`);
 
         const cfg = await loadMaintenanceConfig(db);
@@ -988,10 +1070,17 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** POST /api/v1/maintenance/run — trigger manual maintenance run. */
   app.post(
     '/api/v1/maintenance/run',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_MANAGE) },
     async (_req, reply) => {
       try {
         app.log.info(`[${localTimestamp()}] Manual maintenance run triggered`);
+        await writeAuditLog(db, {
+          action: 'maintenance_run',
+          resource_type: 'maintenance',
+          ip: _req.ip,
+          user_id: _req.currentUser?.id,
+          session_id: _req.currentSession?.id,
+        });
         const result = await runMaintenance(db);
         return reply.send(result);
       } catch (err: any) {
@@ -1004,7 +1093,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/maintenance/history — list recent maintenance runs. */
   app.get<{ Querystring: { limit?: string } }>(
     '/api/v1/maintenance/history',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_VIEW) },
     async (request, reply) => {
       const rawLimit = Number(request.query.limit ?? 20);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 100) : 20;
@@ -1041,7 +1130,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/maintenance/backup/config — get backup settings. */
   app.get(
     '/api/v1/maintenance/backup/config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_VIEW) },
     async (_req, reply) => {
       try {
         const cfg = await loadBackupConfig(db);
@@ -1062,7 +1151,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** PUT /api/v1/maintenance/backup/config — update backup settings. */
   app.put(
     '/api/v1/maintenance/backup/config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_MANAGE) },
     async (request, reply) => {
       const body = (request.body as any) ?? {};
 
@@ -1108,6 +1197,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         `, [JSON.stringify(current)]);
 
         invalidateBackupConfigCache();
+
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'backup_config',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] Backup config updated`);
 
         return reply.send({ config: current, defaults: BACKUP_CONFIG_DEFAULTS });
@@ -1121,10 +1219,17 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** POST /api/v1/maintenance/backup/trigger — trigger manual backup. */
   app.post(
     '/api/v1/maintenance/backup/trigger',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_MANAGE) },
     async (_req, reply) => {
       try {
         app.log.info(`[${localTimestamp()}] Manual backup triggered`);
+        await writeAuditLog(db, {
+          action: 'backup_trigger',
+          resource_type: 'backup',
+          ip: _req.ip,
+          user_id: _req.currentUser?.id,
+          session_id: _req.currentSession?.id,
+        });
         const result = await runBackup(db);
 
         // Run cleanup after backup
@@ -1144,7 +1249,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/maintenance/backup/list — list available backup files. */
   app.get(
     '/api/v1/maintenance/backup/list',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_VIEW) },
     async (_req, reply) => {
       try {
         const backups = listBackups();
@@ -1159,7 +1264,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/maintenance/backup/download/:filename — download a backup file. */
   app.get<{ Params: { filename: string } }>(
     '/api/v1/maintenance/backup/download/:filename',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_MANAGE) },
     async (request, reply) => {
       const { filename } = request.params;
       const filepath = getBackupPath(filename);
@@ -1184,7 +1289,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** DELETE /api/v1/maintenance/backup/:filename — delete a specific backup. */
   app.delete<{ Params: { filename: string } }>(
     '/api/v1/maintenance/backup/:filename',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.DATABASE_MANAGE) },
     async (request, reply) => {
       const { filename } = request.params;
       const deleted = deleteBackupFile(filename);
@@ -1192,6 +1297,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       if (!deleted) {
         return reply.code(404).send({ error: 'Backup file not found or could not be deleted.' });
       }
+
+      await writeAuditLog(db, {
+        action: 'backup_delete',
+        resource_type: 'backup',
+        details: { filename },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
 
       app.log.info(`[${localTimestamp()}] Backup deleted: ${filename}`);
       return reply.send({ deleted: true, filename });
@@ -1203,7 +1317,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** GET /api/v1/privacy-config — return current privacy settings. */
   app.get(
     '/api/v1/privacy-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.PRIVACY_VIEW) },
     async (_req, reply) => {
       try {
         const row = await db('app_config').where({ key: 'privacy_config' }).first('value');
@@ -1230,7 +1344,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** PUT /api/v1/privacy-config — update privacy settings. */
   app.put(
     '/api/v1/privacy-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.PRIVACY_MANAGE) },
     async (request, reply) => {
       const body = (request.body as any) ?? {};
 
@@ -1293,6 +1407,14 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         // Invalidate cache so pipeline picks up changes
         invalidatePrivacyFilterCache();
 
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'privacy_config',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] Privacy config updated`);
 
         return reply.send({ config: current, defaults: PRIVACY_FILTER_DEFAULTS });
@@ -1306,7 +1428,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** POST /api/v1/privacy/test-filter — test privacy filter against a sample message. */
   app.post<{ Body: { message: string } }>(
     '/api/v1/privacy/test-filter',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.PRIVACY_MANAGE) },
     async (request, reply) => {
       const { message } = request.body ?? {} as any;
       if (!message || typeof message !== 'string') {
@@ -1346,7 +1468,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     };
   }>(
     '/api/v1/events/bulk-delete',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.PRIVACY_MANAGE) },
     async (request, reply) => {
       const { confirmation, from, to, system_id } = request.body ?? {} as any;
 
@@ -1454,6 +1576,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           `${windowsDeleted} windows deleted (from=${from ?? 'any'}, to=${to ?? 'any'}, system_id=${system_id ?? 'all'})`,
         );
 
+        await writeAuditLog(db, {
+          action: 'events_bulk_delete',
+          resource_type: 'events',
+          details: { from, to, system_id, deleted_events: totalEventsDeleted },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         return reply.send({
           deleted_events: totalEventsDeleted,
           deleted_scores: totalScoresDeleted,
@@ -1470,7 +1601,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** POST /api/v1/privacy/purge-rag-history — delete all RAG history. */
   app.post<{ Body: { confirmation: string } }>(
     '/api/v1/privacy/purge-rag-history',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.PRIVACY_MANAGE) },
     async (request, reply) => {
       const { confirmation } = request.body ?? {} as any;
       if (confirmation !== 'YES') {
@@ -1479,6 +1610,16 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
       try {
         const deleted = await db('rag_history').del();
+
+        await writeAuditLog(db, {
+          action: 'rag_purge',
+          resource_type: 'rag_history',
+          details: { deleted },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] RAG history purged: ${deleted} entries`);
         return reply.send({ deleted, message: `Deleted ${deleted} RAG history entries.` });
       } catch (err: any) {
@@ -1491,7 +1632,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   /** POST /api/v1/privacy/purge-llm-usage — delete all LLM usage logs. */
   app.post<{ Body: { confirmation: string } }>(
     '/api/v1/privacy/purge-llm-usage',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.PRIVACY_MANAGE) },
     async (request, reply) => {
       const { confirmation } = request.body ?? {} as any;
       if (confirmation !== 'YES') {
@@ -1500,6 +1641,16 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
       try {
         const deleted = await db('llm_usage').del();
+
+        await writeAuditLog(db, {
+          action: 'llm_usage_purge',
+          resource_type: 'llm_usage',
+          details: { deleted },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         app.log.info(`[${localTimestamp()}] LLM usage logs purged: ${deleted} entries`);
         return reply.send({ deleted, message: `Deleted ${deleted} LLM usage log entries.` });
       } catch (err: any) {

@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { invalidateSourceCache } from '../ingest/sourceMatch.js';
 import type { CreateLogSourceBody, UpdateLogSourceBody } from '../../types/index.js';
+import { writeAuditLog } from '../../middleware/audit.js';
 
 /**
  * CRUD for log_sources.
@@ -16,7 +18,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
   // ── LIST (all or by system) ─────────────────────────────────
   app.get<{ Querystring: { system_id?: string } }>(
     '/api/v1/sources',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
     async (request, reply) => {
       let query = db('log_sources').orderBy('priority', 'asc');
       if (request.query.system_id) {
@@ -38,7 +40,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
   // ── GET BY ID ───────────────────────────────────────────────
   app.get<{ Params: { id: string } }>(
     '/api/v1/sources/:id',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
     async (request, reply) => {
       const source = await db('log_sources').where({ id: request.params.id }).first();
       if (!source) return reply.code(404).send({ error: 'Log source not found' });
@@ -53,7 +55,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
   // ── CREATE ──────────────────────────────────────────────────
   app.post<{ Body: CreateLogSourceBody }>(
     '/api/v1/sources',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { system_id, label, selector, priority } = request.body ?? {};
 
@@ -87,6 +89,16 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       invalidateSourceCache();
       app.log.info(`[${localTimestamp()}] Log source created: id=${id}, label="${label}"`);
 
+      await writeAuditLog(db, {
+        action: 'source_create',
+        resource_type: 'log_source',
+        resource_id: id,
+        details: { label: label.trim(), system_id },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const created = await db('log_sources').where({ id }).first();
       let createdSelector = created.selector;
       if (typeof createdSelector === 'string') {
@@ -99,7 +111,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
   // ── UPDATE ──────────────────────────────────────────────────
   app.put<{ Params: { id: string }; Body: UpdateLogSourceBody }>(
     '/api/v1/sources/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('log_sources').where({ id }).first();
@@ -132,6 +144,17 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       invalidateSourceCache();
 
       app.log.info(`[${localTimestamp()}] Log source updated: id=${id}`);
+
+      await writeAuditLog(db, {
+        action: 'source_update',
+        resource_type: 'log_source',
+        resource_id: id,
+        details: { ...updates },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const updated = await db('log_sources').where({ id }).first();
       let updatedSelector = updated.selector;
       if (typeof updatedSelector === 'string') {
@@ -144,7 +167,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
   // ── DELETE ──────────────────────────────────────────────────
   app.delete<{ Params: { id: string } }>(
     '/api/v1/sources/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('log_sources').where({ id }).first();
@@ -154,6 +177,17 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       invalidateSourceCache();
 
       app.log.info(`[${localTimestamp()}] Log source deleted: id=${id}`);
+
+      await writeAuditLog(db, {
+        action: 'source_delete',
+        resource_type: 'log_source',
+        resource_id: id,
+        details: { label: existing.label },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       return reply.code(204).send();
     },
   );

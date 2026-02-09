@@ -115,6 +115,44 @@ export interface ApiKeyRow {
   key_hash: string;
   scope: ApiKeyScope;
   name: string;
+  description?: string;
+  created_by?: string;
+  expires_at?: string;
+  last_used_at?: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+// ── User ──────────────────────────────────────────────────────
+
+export type UserRole = 'administrator' | 'auditor' | 'monitoring_agent';
+
+export interface UserRow {
+  id: string;
+  username: string;
+  password_hash: string;
+  display_name?: string;
+  email?: string;
+  role: UserRole;
+  is_active: boolean;
+  must_change_password: boolean;
+  last_login_at?: string;
+  failed_login_count: number;
+  locked_until?: string;
+  created_at: string;
+  updated_at: string;
+  created_by?: string;
+}
+
+// ── Session ───────────────────────────────────────────────────
+
+export interface SessionRow {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  ip?: string;
+  user_agent?: string;
+  expires_at: string;
   created_at: string;
 }
 

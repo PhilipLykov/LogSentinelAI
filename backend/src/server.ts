@@ -1,6 +1,7 @@
 import { config, localTimestamp } from './config/index.js';
 import { initDb, closeDb } from './db/index.js';
 import { ensureAdminKey } from './middleware/apiKeys.js';
+import { ensureAdminUser } from './middleware/bootstrapAdmin.js';
 import { getDb } from './db/index.js';
 import { buildApp } from './app.js';
 import { OpenAiAdapter } from './modules/llm/adapter.js';
@@ -24,9 +25,10 @@ async function main(): Promise<void> {
   // 1. Initialize database (run migrations + seeds)
   await initDb();
 
-  // 2. Ensure at least one admin API key exists
+  // 2. Ensure at least one admin API key exists + bootstrap admin user
   const db = getDb();
   await ensureAdminKey(db, config.adminApiKey || undefined);
+  await ensureAdminUser(db);
 
   // 3. Build and start Fastify app
   const app = await buildApp();

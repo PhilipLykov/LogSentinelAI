@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import type { CreateSystemBody, UpdateSystemBody } from '../../types/index.js';
 
@@ -15,7 +16,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
   // ── LIST ────────────────────────────────────────────────────
   app.get(
     '/api/v1/systems',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
     async (_request, reply) => {
       const systems = await db('monitored_systems').orderBy('name').select('*');
       return reply.send(systems);
@@ -25,7 +26,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
   // ── GET BY ID ───────────────────────────────────────────────
   app.get<{ Params: { id: string } }>(
     '/api/v1/systems/:id',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
     async (request, reply) => {
       const system = await db('monitored_systems').where({ id: request.params.id }).first();
       if (!system) return reply.code(404).send({ error: 'System not found' });
@@ -36,7 +37,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
   // ── CREATE ──────────────────────────────────────────────────
   app.post<{ Body: CreateSystemBody }>(
     '/api/v1/systems',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { name, description, retention_days } = request.body ?? {};
 
@@ -73,7 +74,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
   // ── UPDATE ──────────────────────────────────────────────────
   app.put<{ Params: { id: string }; Body: UpdateSystemBody }>(
     '/api/v1/systems/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('monitored_systems').where({ id }).first();
@@ -114,7 +115,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
   // ── DELETE ──────────────────────────────────────────────────
   app.delete<{ Params: { id: string } }>(
     '/api/v1/systems/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('monitored_systems').where({ id }).first();

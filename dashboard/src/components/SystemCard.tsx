@@ -1,14 +1,16 @@
 import { useState } from 'react';
-import { type DashboardSystem, acknowledgeEvents, fetchFindings, acknowledgeFinding } from '../api';
+import { type DashboardSystem, type CurrentUser, acknowledgeEvents, fetchFindings, acknowledgeFinding } from '../api';
 import { ScoreBars } from './ScoreBar';
+import { hasPermission } from '../App';
 
 interface SystemCardProps {
   system: DashboardSystem;
   onClick: () => void;
   onAuthError: () => void;
+  currentUser?: CurrentUser | null;
 }
 
-export function SystemCard({ system, onClick, onAuthError }: SystemCardProps) {
+export function SystemCard({ system, onClick, onAuthError, currentUser }: SystemCardProps) {
   const [acking, setAcking] = useState(false);
   const [ackMsg, setAckMsg] = useState('');
 
@@ -105,24 +107,26 @@ export function SystemCard({ system, onClick, onAuthError }: SystemCardProps) {
           No scores yet — awaiting pipeline run
         </div>
       )}
-      <div className="sc-actions" onClick={(ev) => ev.stopPropagation()}>
-        <button
-          className="btn btn-xs btn-outline"
-          onClick={handleAckEvents}
-          disabled={acking}
-          title="Acknowledge all events up to now"
-        >
-          {acking ? '...' : 'Ack events'}
-        </button>
-        <button
-          className="btn btn-xs btn-outline"
-          onClick={handleAckFindings}
-          disabled={acking}
-          title="Acknowledge all open findings"
-        >
-          {acking ? '...' : 'Ack findings'}
-        </button>
-      </div>
+      {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+        <div className="sc-actions" onClick={(ev) => ev.stopPropagation()}>
+          <button
+            className="btn btn-xs btn-outline"
+            onClick={handleAckEvents}
+            disabled={acking}
+            title="Acknowledge all events up to now"
+          >
+            {acking ? '...' : 'Ack events'}
+          </button>
+          <button
+            className="btn btn-xs btn-outline"
+            onClick={handleAckFindings}
+            disabled={acking}
+            title="Acknowledge all open findings"
+          >
+            {acking ? '...' : 'Ack findings'}
+          </button>
+        </div>
+      )}
       {ackMsg && (
         <div className={`sc-ack-msg${ackMsg.startsWith('Error') ? ' sc-ack-error' : ''}`}>
           {ackMsg}

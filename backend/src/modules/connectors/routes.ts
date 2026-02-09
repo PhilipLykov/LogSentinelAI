@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { getAvailableConnectorTypes } from './registry.js';
 import { validateUrl } from './urlValidation.js';
+import { writeAuditLog } from '../../middleware/audit.js';
 
 /**
  * Connector config API: CRUD for connectors.
@@ -16,7 +18,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
   app.get(
     '/api/v1/connectors',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
     async (_req, reply) => {
       const connectors = await db('connectors').orderBy('name').select('*');
       return reply.send(connectors.map(parseConfig));
@@ -25,7 +27,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
   app.get(
     '/api/v1/connectors/types',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
     async (_req, reply) => {
       return reply.send(getAvailableConnectorTypes());
     },
@@ -33,7 +35,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/connectors/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_VIEW) },
     async (request, reply) => {
       const conn = await db('connectors').where({ id: request.params.id }).first();
       if (!conn) return reply.code(404).send({ error: 'Connector not found' });
@@ -46,7 +48,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
   app.post(
     '/api/v1/connectors',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { type, name, config, enabled, poll_interval_seconds } = request.body as any;
 
@@ -80,6 +82,17 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
       });
 
       app.log.info(`[${localTimestamp()}] Connector created: ${type}/${name} (${id})`);
+
+      await writeAuditLog(db, {
+        action: 'connector_create',
+        resource_type: 'connector',
+        resource_id: id,
+        details: { type, name },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const created = await db('connectors').where({ id }).first();
       return reply.code(201).send(parseConfig(created));
     },
@@ -87,7 +100,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
   app.put<{ Params: { id: string } }>(
     '/api/v1/connectors/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('connectors').where({ id }).first();
@@ -111,6 +124,17 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
       }
 
       await db('connectors').where({ id }).update(updates);
+
+      await writeAuditLog(db, {
+        action: 'connector_update',
+        resource_type: 'connector',
+        resource_id: id,
+        details: { ...updates },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const updated = await db('connectors').where({ id }).first();
       return reply.send(parseConfig(updated));
     },
@@ -118,7 +142,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/connectors/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
 
@@ -130,6 +154,17 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
         await trx('connector_cursors').where({ connector_id: id }).del();
         await trx('connectors').where({ id }).del();
       });
+
+      await writeAuditLog(db, {
+        action: 'connector_delete',
+        resource_type: 'connector',
+        resource_id: id,
+        details: { name: existing.name },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       return reply.code(204).send();
     },
   );

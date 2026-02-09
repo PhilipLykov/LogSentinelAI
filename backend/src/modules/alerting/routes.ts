@@ -2,8 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { sendNotification, type AlertPayload } from './channels.js';
+import { writeAuditLog } from '../../middleware/audit.js';
 
 /**
  * Alerting API: CRUD for channels, rules, silences; alert history; test notification.
@@ -16,7 +18,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.get(
     '/api/v1/notification-channels',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_VIEW) },
     async (_req, reply) => {
       const channels = await db('notification_channels').orderBy('name').select('*');
       return reply.send(channels.map(parseJsonFields));
@@ -25,7 +27,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.post(
     '/api/v1/notification-channels',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const { type, name, config, enabled, scope } = request.body as any;
 
@@ -49,6 +51,17 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       });
 
       app.log.info(`[${localTimestamp()}] Channel created: ${type}/${name} (${id})`);
+
+      await writeAuditLog(db, {
+        action: 'channel_create',
+        resource_type: 'notification_channel',
+        resource_id: id,
+        details: { type, name },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const created = await db('notification_channels').where({ id }).first();
       return reply.code(201).send(parseJsonFields(created));
     },
@@ -56,7 +69,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.put<{ Params: { id: string } }>(
     '/api/v1/notification-channels/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('notification_channels').where({ id }).first();
@@ -70,6 +83,17 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       if (scope !== undefined) updates.scope = scope;
 
       await db('notification_channels').where({ id }).update(updates);
+
+      await writeAuditLog(db, {
+        action: 'channel_update',
+        resource_type: 'notification_channel',
+        resource_id: id,
+        details: { ...updates },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const updated = await db('notification_channels').where({ id }).first();
       return reply.send(parseJsonFields(updated));
     },
@@ -77,7 +101,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/notification-channels/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('notification_channels').where({ id }).first();
@@ -92,6 +116,17 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       }
 
       await db('notification_channels').where({ id }).del();
+
+      await writeAuditLog(db, {
+        action: 'channel_delete',
+        resource_type: 'notification_channel',
+        resource_id: id,
+        details: { name: existing.name },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       return reply.code(204).send();
     },
   );
@@ -99,7 +134,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
   // ── Test notification ──────────────────────────────────────
   app.post<{ Params: { id: string } }>(
     '/api/v1/notification-channels/:id/test',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const channel = await db('notification_channels').where({ id: request.params.id }).first();
       if (!channel) return reply.code(404).send({ error: 'Channel not found' });
@@ -132,7 +167,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.get(
     '/api/v1/notification-rules',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_VIEW) },
     async (_req, reply) => {
       const rules = await db('notification_rules').orderBy('created_at', 'desc').select('*');
       return reply.send(rules.map(parseJsonFields));
@@ -141,7 +176,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.post(
     '/api/v1/notification-rules',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const body = request.body as any;
 
@@ -176,6 +211,17 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       });
 
       app.log.info(`[${localTimestamp()}] Rule created: ${body.trigger_type} (${id})`);
+
+      await writeAuditLog(db, {
+        action: 'rule_create',
+        resource_type: 'notification_rule',
+        resource_id: id,
+        details: { trigger_type: body.trigger_type, channel_id: body.channel_id },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const created = await db('notification_rules').where({ id }).first();
       return reply.code(201).send(parseJsonFields(created));
     },
@@ -183,7 +229,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.put<{ Params: { id: string } }>(
     '/api/v1/notification-rules/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const { id } = request.params;
       const existing = await db('notification_rules').where({ id }).first();
@@ -202,6 +248,17 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       if (body.template_body !== undefined) updates.template_body = body.template_body;
 
       await db('notification_rules').where({ id }).update(updates);
+
+      await writeAuditLog(db, {
+        action: 'rule_update',
+        resource_type: 'notification_rule',
+        resource_id: id,
+        details: { ...updates },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const updated = await db('notification_rules').where({ id }).first();
       return reply.send(parseJsonFields(updated));
     },
@@ -209,11 +266,22 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/notification-rules/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const existing = await db('notification_rules').where({ id: request.params.id }).first();
       if (!existing) return reply.code(404).send({ error: 'Rule not found' });
       await db('notification_rules').where({ id: request.params.id }).del();
+
+      await writeAuditLog(db, {
+        action: 'rule_delete',
+        resource_type: 'notification_rule',
+        resource_id: request.params.id,
+        details: { trigger_type: existing.trigger_type },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       return reply.code(204).send();
     },
   );
@@ -222,7 +290,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.get(
     '/api/v1/silences',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_VIEW) },
     async (_req, reply) => {
       const silences = await db('silences').orderBy('starts_at', 'desc').select('*');
       return reply.send(silences.map(parseJsonFields));
@@ -231,7 +299,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.post(
     '/api/v1/silences',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const body = request.body as any;
 
@@ -272,6 +340,17 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       });
 
       app.log.info(`[${localTimestamp()}] Silence created: ${id}`);
+
+      await writeAuditLog(db, {
+        action: 'silence_create',
+        resource_type: 'silence',
+        resource_id: id,
+        details: { starts_at: body.starts_at, ends_at: body.ends_at },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const created = await db('silences').where({ id }).first();
       return reply.code(201).send(parseJsonFields(created));
     },
@@ -279,11 +358,22 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/silences/:id',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.NOTIFICATIONS_MANAGE) },
     async (request, reply) => {
       const existing = await db('silences').where({ id: request.params.id }).first();
       if (!existing) return reply.code(404).send({ error: 'Silence not found' });
       await db('silences').where({ id: request.params.id }).del();
+
+      await writeAuditLog(db, {
+        action: 'silence_delete',
+        resource_type: 'silence',
+        resource_id: request.params.id,
+        details: {},
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       return reply.code(204).send();
     },
   );
@@ -292,7 +382,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
 
   app.get<{ Querystring: { system_id?: string; rule_id?: string; state?: string; from?: string; to?: string; limit?: string } }>(
     '/api/v1/alerts',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       let query = db('alert_history').orderBy('created_at', 'desc');
 

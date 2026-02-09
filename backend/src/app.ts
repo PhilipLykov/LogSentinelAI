@@ -12,6 +12,10 @@ import { registerAlertingRoutes } from './modules/alerting/routes.js';
 import { registerConnectorRoutes } from './modules/connectors/routes.js';
 import { registerFeaturesRoutes } from './modules/features/routes.js';
 import { registerEventRoutes } from './modules/events/routes.js';
+import { registerAuthRoutes } from './modules/auth/routes.js';
+import { registerUserRoutes } from './modules/users/routes.js';
+import { registerApiKeyRoutes } from './modules/auth/apiKeyRoutes.js';
+import { registerAuditRoutes } from './modules/auth/auditRoutes.js';
 import { localTimestamp } from './config/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -57,6 +61,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.get('/healthz', async () => ({ status: 'ok', time: localTimestamp() }));
 
   // ── API routes ─────────────────────────────────────────────
+  await registerAuthRoutes(app);          // login, logout, me, change-password
+  await registerUserRoutes(app);          // user CRUD (admin only)
+  await registerApiKeyRoutes(app);        // API key management (admin only)
+  await registerAuditRoutes(app);         // audit log (read-only, admin + auditor)
   await registerIngestRoutes(app);
   await registerSystemRoutes(app);
   await registerSourceRoutes(app);

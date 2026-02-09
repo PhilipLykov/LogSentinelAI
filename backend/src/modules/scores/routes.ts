@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { CRITERIA } from '../../types/index.js';
 import { estimateCost, MODEL_PRICING } from '../llm/pricing.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
@@ -15,7 +16,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
   // ── Effective scores per system (latest window) ────────────
   app.get<{ Querystring: { from?: string; to?: string } }>(
     '/api/v1/scores/systems',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       const { from, to } = request.query;
 
@@ -70,7 +71,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
   // ── Event scores for a specific event ──────────────────────
   app.get<{ Params: { eventId: string } }>(
     '/api/v1/events/:eventId/scores',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
       const scores = await db('event_scores')
         .where({ event_id: request.params.eventId })
@@ -100,7 +101,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
     Querystring: { criterion_id?: string; limit?: string };
   }>(
     '/api/v1/systems/:systemId/event-scores',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
       const { systemId } = request.params;
       const criterionId = request.query.criterion_id;
@@ -151,7 +152,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
   // ── Meta result for a window ───────────────────────────────
   app.get<{ Params: { windowId: string } }>(
     '/api/v1/windows/:windowId/meta',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       const meta = await db('meta_results')
         .where({ window_id: request.params.windowId })
@@ -178,7 +179,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
   // ── Windows for a system ───────────────────────────────────
   app.get<{ Querystring: { system_id?: string; from?: string; to?: string; limit?: string } }>(
     '/api/v1/windows',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       let query = db('windows').orderBy('to_ts', 'desc');
 
@@ -199,7 +200,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
 
   app.get<{ Querystring: { from?: string; to?: string; system_id?: string; limit?: string } }>(
     '/api/v1/llm-usage',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_USAGE_VIEW) },
     async (request, reply) => {
       const rawLimit = Number(request.query.limit ?? 200);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 1000) : 200;

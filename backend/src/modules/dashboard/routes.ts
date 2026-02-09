@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { CRITERIA } from '../../types/index.js';
 import { localTimestamp } from '../../config/index.js';
+import { writeAuditLog } from '../../middleware/audit.js';
 
 /**
  * Dashboard-oriented API routes: system overview, drill-down, SSE stream.
@@ -13,7 +15,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   // ── Dashboard overview: systems with latest effective scores ─
   app.get(
     '/api/v1/dashboard/systems',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (_request, reply) => {
       const systems = await db('monitored_systems').orderBy('name').select('*');
 
@@ -78,7 +80,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   // ── Drill-down: events for a system ────────────────────────
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string; limit?: string } }>(
     '/api/v1/systems/:id/events',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
       const { id } = request.params;
       const { from, to } = request.query;
@@ -111,7 +113,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   // ── Drill-down: meta for a system (specific window) ────────
   app.get<{ Params: { id: string }; Querystring: { window_id?: string } }>(
     '/api/v1/systems/:id/meta',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       const { id } = request.params;
 
@@ -157,7 +159,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
     Querystring: { status?: string; limit?: string };
   }>(
     '/api/v1/systems/:id/findings',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       const { id } = request.params;
       const statusFilter = request.query.status; // 'open', 'acknowledged', 'resolved', or 'active' (open+acknowledged)
@@ -184,7 +186,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   // Acknowledge a finding
   app.put<{ Params: { findingId: string } }>(
     '/api/v1/findings/:findingId/acknowledge',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
     async (request, reply) => {
       const { findingId } = request.params;
 
@@ -205,6 +207,16 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           acknowledged_by: 'admin', // Future: extract from auth context
         });
 
+      await writeAuditLog(db, {
+        action: 'finding_acknowledge',
+        resource_type: 'finding',
+        resource_id: findingId,
+        details: { previous_status: finding.status },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const updated = await db('findings').where({ id: findingId }).first();
       return reply.send(updated);
     },
@@ -213,7 +225,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   // Re-open an acknowledged finding (undo)
   app.put<{ Params: { findingId: string } }>(
     '/api/v1/findings/:findingId/reopen',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
     async (request, reply) => {
       const { findingId } = request.params;
 
@@ -233,6 +245,16 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           acknowledged_by: null,
         });
 
+      await writeAuditLog(db, {
+        action: 'finding_reopen',
+        resource_type: 'finding',
+        resource_id: findingId,
+        details: {},
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       const updated = await db('findings').where({ id: findingId }).first();
       return reply.send(updated);
     },
@@ -241,7 +263,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   // ── SSE: score updates stream ──────────────────────────────
   app.get(
     '/api/v1/scores/stream',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       // Hijack the reply so Fastify does not try to manage the response
       reply.hijack();

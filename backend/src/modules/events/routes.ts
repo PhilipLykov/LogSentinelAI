@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { invalidateAiConfigCache } from '../llm/aiConfig.js';
+import { writeAuditLog } from '../../middleware/audit.js';
 
 /** Allowed sort columns — prevents SQL injection via sort_by param. */
 const ALLOWED_SORT_COLUMNS = new Set([
@@ -48,7 +50,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
     };
   }>(
     '/api/v1/events/search',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
       const {
         q,
@@ -212,7 +214,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
     Querystring: { system_id?: string; days?: string };
   }>(
     '/api/v1/events/facets',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
       const { system_id } = request.query;
       const rawDays = Number(request.query.days ?? 7);
@@ -272,7 +274,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
     };
   }>(
     '/api/v1/events/trace',
-    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
       const { value, field, anchor_time } = request.query;
 
@@ -389,7 +391,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post(
     '/api/v1/events/acknowledge',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
     async (request, reply) => {
       const body = request.body as any ?? {};
       const { system_id, from, to } = body;
@@ -455,6 +457,15 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           `${system_id ? ` (system=${system_id})` : ''}, range=${fromTs ?? 'beginning'}..${toTs}`,
         );
 
+        await writeAuditLog(db, {
+          action: 'event_acknowledge',
+          resource_type: 'events',
+          details: { system_id, from: fromTs, to: toTs, count: totalAcked },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         return reply.send({
           acknowledged: totalAcked,
           message: `${totalAcked} event${totalAcked !== 1 ? 's' : ''} acknowledged.`,
@@ -473,7 +484,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post(
     '/api/v1/events/unacknowledge',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
     async (request, reply) => {
       const body = request.body as any ?? {};
       const { system_id, from, to } = body;
@@ -498,6 +509,16 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         const result = await query.update({ acknowledged_at: null });
 
         app.log.info(`[${localTimestamp()}] Bulk event un-acknowledge: ${result} events`);
+
+        await writeAuditLog(db, {
+          action: 'event_unacknowledge',
+          resource_type: 'events',
+          details: { count: result },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
         return reply.send({
           unacknowledged: result,
           message: `${result} event${result !== 1 ? 's' : ''} un-acknowledged.`,
@@ -518,7 +539,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
 
   app.get(
     '/api/v1/events/ack-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
     async (_req, reply) => {
       const rows = await db('app_config')
         .whereIn('key', ['event_ack_mode', 'event_ack_prompt'])
@@ -543,7 +564,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
 
   app.put(
     '/api/v1/events/ack-config',
-    { preHandler: requireAuth('admin') },
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
     async (request, reply) => {
       const body = request.body as any ?? {};
       const { mode, prompt } = body;
@@ -577,6 +598,15 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       }
 
       invalidateAiConfigCache();
+
+      await writeAuditLog(db, {
+        action: 'config_update',
+        resource_type: 'ack_config',
+        details: { mode, prompt },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
 
       // Return current state
       const rows = await db('app_config')

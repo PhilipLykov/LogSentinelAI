@@ -337,6 +337,21 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       errors.push(`Orphaned template cleanup failed: ${err.message}`);
     }
 
+    // Clean up expired sessions
+    try {
+      const expiredSessions = await db('sessions')
+        .where('expires_at', '<', new Date().toISOString())
+        .del();
+      if (expiredSessions > 0) {
+        console.log(`[${localTimestamp()}] Maintenance: cleaned up ${expiredSessions} expired sessions`);
+      }
+    } catch (err: any) {
+      // sessions table might not exist yet — ignore
+      if (!err.message.includes('does not exist')) {
+        errors.push(`Session cleanup failed: ${err.message}`);
+      }
+    }
+
     // Clean up old maintenance logs (keep last 100)
     try {
       const oldLogs = await db('maintenance_log')

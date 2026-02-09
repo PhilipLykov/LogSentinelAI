@@ -12,6 +12,8 @@ const SENSITIVE_KEYS = new Set([
  * Write an audit log entry.
  * OWASP A09: No secrets in details; log auth and config changes.
  * The `at` column uses DB-level NOW() for correct timestamptz handling.
+ *
+ * Supports optional `user_id` and `session_id` for traceability.
  */
 export async function writeAuditLog(
   db: Knex,
@@ -22,18 +24,22 @@ export async function writeAuditLog(
     resource_id?: string;
     details?: Record<string, unknown>;
     ip?: string;
+    user_id?: string;
+    session_id?: string;
   },
 ): Promise<void> {
   try {
     await db('audit_log').insert({
       id: uuidv4(),
       // Let the DB default (knex.fn.now()) handle timestamptz correctly
-      actor: entry.actor ?? null,
+      actor: entry.actor ?? entry.user_id ?? null,
       action: entry.action,
       resource_type: entry.resource_type,
       resource_id: entry.resource_id ?? null,
       details: entry.details ? JSON.stringify(sanitizeDetails(entry.details)) : null,
       ip: entry.ip ?? null,
+      user_id: entry.user_id ?? null,
+      session_id: entry.session_id ?? null,
     });
   } catch (err) {
     // Audit logging should never break the main flow

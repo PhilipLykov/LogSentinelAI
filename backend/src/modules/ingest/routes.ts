@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { normalizeEntry, computeNormalizedHash } from './normalize.js';
 import { redactEvent } from './redact.js';
@@ -53,7 +54,7 @@ function extractEntries(body: unknown): unknown[] | null {
 export async function registerIngestRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/api/v1/ingest',
-    { preHandler: requireAuth('ingest', 'admin') },
+    { preHandler: requireAuth(PERMISSIONS.INGEST) },
     async (request, reply) => {
       const entries = extractEntries(request.body);
 
