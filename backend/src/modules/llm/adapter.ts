@@ -65,6 +65,7 @@ export interface LlmAdapter {
     events: Array<{ message: string; severity?: string; host?: string; program?: string }>,
     systemDescription: string,
     sourceLabels: string[],
+    options?: { systemPrompt?: string },
   ): Promise<ScoreEventsResult>;
 
   metaAnalyze(
@@ -77,12 +78,15 @@ export interface LlmAdapter {
     systemDescription: string,
     sourceLabels: string[],
     context?: MetaAnalysisContext,
+    options?: { systemPrompt?: string },
   ): Promise<MetaAnalyzeResult>;
 }
 
-// ── OpenAI Adapter ───────────────────────────────────────────
+// ── Default system prompts (exported for UI display / reset) ─
 
-const SCORE_SYSTEM_PROMPT = `You are an expert IT log analyst. Analyze each log event and return a JSON object with a "scores" key containing an array of objects, one per event.
+export const DEFAULT_SCORE_SYSTEM_PROMPT = `You are an expert IT log analyst. You will receive events from a specific monitored system along with its SYSTEM SPECIFICATION — a description that explains what the system does, its purpose, and what aspects are important. USE the system specification to contextualise every event: what is normal for this system, what is suspicious, what constitutes a real risk, and what can be safely ignored.
+
+Analyze each log event and return a JSON object with a "scores" key containing an array of objects, one per event.
 
 Each object must have exactly these 6 keys (float 0.0 to 1.0):
 - it_security: likelihood of security threat
@@ -97,9 +101,11 @@ Example response for 2 events:
 
 Return ONLY valid JSON with the "scores" array.`;
 
-const META_SYSTEM_PROMPT = `You are an expert IT log analyst performing a meta-analysis of a batch of log events from a single monitored system over a time window.
+export const DEFAULT_META_SYSTEM_PROMPT = `You are an expert IT log analyst performing a meta-analysis of a batch of log events from a single monitored system over a time window.
 
-You will receive the current window's events AND context from previous analysis windows (summaries and currently open findings). Use the previous context to:
+IMPORTANT: You will receive a SYSTEM SPECIFICATION that describes the monitored system — its purpose, architecture, services, and what to watch for. Treat this specification as authoritative context: use it to understand which events are routine, which indicate real problems, and what the operational priorities are for this specific system.
+
+You will also receive the current window's events AND context from previous analysis windows (summaries and currently open findings). Use the previous context to:
 1. Spot trends that span multiple windows (e.g. recurring errors, escalating problems).
 2. Decide whether previously reported findings are still relevant or can be resolved.
 3. Avoid repeating findings that are still open — only create NEW findings for genuinely new observations.
@@ -117,6 +123,8 @@ Return a JSON object with:
 Important: produce at least 3-5 findings per analysis when there are notable events. Be specific and actionable. Reference event patterns, hosts, programs, or error messages where relevant.
 
 Return ONLY valid JSON.`;
+
+// ── OpenAI Adapter ───────────────────────────────────────────
 
 export class OpenAiAdapter implements LlmAdapter {
   private apiKey: string;
@@ -149,19 +157,32 @@ export class OpenAiAdapter implements LlmAdapter {
     events: Array<{ message: string; severity?: string; host?: string; program?: string }>,
     systemDescription: string,
     sourceLabels: string[],
+    options?: { systemPrompt?: string },
   ): Promise<ScoreEventsResult> {
-    const userContent = [
-      `System: ${systemDescription}`,
-      `Sources: ${sourceLabels.join(', ')}`,
-      `Number of events: ${events.length}`,
-      '',
-      'Events to analyze:',
-      ...events.map((e, i) =>
-        `[${i + 1}] ${e.severity ? `[${e.severity}]` : ''} ${e.host ? `host=${e.host}` : ''} ${e.program ? `prog=${e.program}` : ''} ${e.message}`
-      ),
-    ].join('\n');
+    const sections: string[] = [];
 
-    const response = await this.chatCompletion(SCORE_SYSTEM_PROMPT, userContent);
+    // System specification — prominent section so the LLM treats it as key context
+    if (systemDescription && systemDescription.trim()) {
+      sections.push('=== SYSTEM SPECIFICATION ===');
+      sections.push(systemDescription.trim());
+      sections.push('=== END SYSTEM SPECIFICATION ===');
+      sections.push('');
+    }
+
+    sections.push(`Log sources: ${sourceLabels.join(', ')}`);
+    sections.push(`Number of events: ${events.length}`);
+    sections.push('');
+    sections.push('Events to analyze:');
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      sections.push(
+        `[${i + 1}] ${e.severity ? `[${e.severity}]` : ''} ${e.host ? `host=${e.host}` : ''} ${e.program ? `prog=${e.program}` : ''} ${e.message}`,
+      );
+    }
+
+    const userContent = sections.join('\n');
+    const prompt = options?.systemPrompt ?? DEFAULT_SCORE_SYSTEM_PROMPT;
+    const response = await this.chatCompletion(prompt, userContent);
 
     let scores: ScoreResult[];
     try {
@@ -198,11 +219,19 @@ export class OpenAiAdapter implements LlmAdapter {
     systemDescription: string,
     sourceLabels: string[],
     context?: MetaAnalysisContext,
+    options?: { systemPrompt?: string },
   ): Promise<MetaAnalyzeResult> {
-    const sections: string[] = [
-      `System: ${systemDescription}`,
-      `Sources: ${sourceLabels.join(', ')}`,
-    ];
+    const sections: string[] = [];
+
+    // System specification — prominent section so the LLM treats it as key context
+    if (systemDescription && systemDescription.trim()) {
+      sections.push('=== SYSTEM SPECIFICATION ===');
+      sections.push(systemDescription.trim());
+      sections.push('=== END SYSTEM SPECIFICATION ===');
+      sections.push('');
+    }
+
+    sections.push(`Log sources: ${sourceLabels.join(', ')}`);
 
     // ── Historical context (sliding window, like a conversation context) ──
     if (context?.previousSummaries?.length) {
@@ -242,7 +271,8 @@ export class OpenAiAdapter implements LlmAdapter {
     }
 
     const userContent = sections.join('\n');
-    const response = await this.chatCompletion(META_SYSTEM_PROMPT, userContent);
+    const prompt = options?.systemPrompt ?? DEFAULT_META_SYSTEM_PROMPT;
+    const response = await this.chatCompletion(prompt, userContent);
 
     try {
       const parsed = JSON.parse(response.content);

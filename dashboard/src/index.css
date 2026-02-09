@@ -1664,7 +1664,7 @@ input:focus-visible,
 /* ── AI Config section ─────────────────────────────────── */
 
 .ai-config-section {
-  max-width: 640px;
+  max-width: 800px;
 }
 
 .ai-config-header {
@@ -1784,6 +1784,117 @@ input:focus-visible,
 
 .ai-config-actions .btn {
   width: auto;
+}
+
+/* ── AI System Prompts section ─────────────────────────── */
+
+.ai-prompts-section {
+  margin-top: 32px;
+  max-width: 800px;
+}
+
+.ai-prompts-section h3 {
+  font-size: 1.15rem;
+  margin-bottom: 8px;
+}
+
+.prompt-block {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.prompt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--bg-card);
+  border: none;
+  padding: 12px 16px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s;
+}
+
+.prompt-toggle:hover {
+  background: var(--bg);
+}
+
+.prompt-chevron {
+  display: inline-block;
+  font-size: 0.7rem;
+  transition: transform 0.2s;
+  color: var(--text-muted);
+}
+
+.prompt-chevron.open {
+  transform: rotate(90deg);
+}
+
+.prompt-custom-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: rgba(129, 140, 248, 0.15);
+  color: var(--accent);
+  margin-left: auto;
+}
+
+.prompt-editor {
+  padding: 16px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+}
+
+.prompt-textarea {
+  width: 100%;
+  min-height: 200px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color 0.15s;
+}
+
+.prompt-textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
+}
+
+.prompt-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.prompt-editor .form-hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 8px;
+  opacity: 0.8;
+  line-height: 1.5;
+}
+
+.prompt-editor .form-hint code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.78rem;
 }
 
 /* ── Notifications section ─────────────────────────────── */

@@ -258,6 +258,31 @@ export async function updateAiConfig(data: {
   });
 }
 
+// ── AI System Prompts ────────────────────────────────────────
+
+export interface AiPromptsResponse {
+  scoring_system_prompt: string | null;
+  meta_system_prompt: string | null;
+  scoring_is_custom: boolean;
+  meta_is_custom: boolean;
+  default_scoring_system_prompt: string;
+  default_meta_system_prompt: string;
+}
+
+export async function fetchAiPrompts(): Promise<AiPromptsResponse> {
+  return apiFetch('/api/v1/ai-prompts');
+}
+
+export async function updateAiPrompts(data: {
+  scoring_system_prompt?: string | null;
+  meta_system_prompt?: string | null;
+}): Promise<AiPromptsResponse> {
+  return apiFetch('/api/v1/ai-prompts', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
 // ── Notification Channels ────────────────────────────────────
 
 export type ChannelType = 'webhook' | 'pushover' | 'ntfy' | 'gotify' | 'telegram';

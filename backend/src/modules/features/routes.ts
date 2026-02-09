@@ -4,7 +4,8 @@ import { requireAuth } from '../../middleware/auth.js';
 import { localTimestamp } from '../../config/index.js';
 import { generateComplianceExport, type ExportParams } from './exportCompliance.js';
 import { askQuestion } from './rag.js';
-import { resolveAiConfig, invalidateAiConfigCache } from '../llm/aiConfig.js';
+import { resolveAiConfig, resolveCustomPrompts, invalidateAiConfigCache } from '../llm/aiConfig.js';
+import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT } from '../llm/adapter.js';
 
 /**
  * Phase 7 feature routes: compliance export, RAG query, app config,
@@ -224,6 +225,107 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         base_url: cfg.baseUrl,
         api_key_set: keySet,
         api_key_hint: hint,
+      });
+    },
+  );
+
+  // ── System prompts (LLM instructions) ──────────────────────
+
+  /**
+   * GET /api/v1/ai-prompts — returns current scoring & meta prompts
+   * with info about whether they are custom or defaults.
+   */
+  app.get(
+    '/api/v1/ai-prompts',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      const custom = await resolveCustomPrompts(db);
+
+      return reply.send({
+        scoring_system_prompt: custom.scoringSystemPrompt ?? null,
+        meta_system_prompt: custom.metaSystemPrompt ?? null,
+        scoring_is_custom: !!custom.scoringSystemPrompt,
+        meta_is_custom: !!custom.metaSystemPrompt,
+        default_scoring_system_prompt: DEFAULT_SCORE_SYSTEM_PROMPT,
+        default_meta_system_prompt: DEFAULT_META_SYSTEM_PROMPT,
+      });
+    },
+  );
+
+  /**
+   * PUT /api/v1/ai-prompts — update one or both system prompts.
+   * Send null or empty string to reset a prompt back to the built-in default.
+   */
+  app.put(
+    '/api/v1/ai-prompts',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = request.body as any ?? {};
+      const { scoring_system_prompt, meta_system_prompt } = body;
+
+      if (scoring_system_prompt === undefined && meta_system_prompt === undefined) {
+        return reply.code(400).send({ error: 'Provide at least one of: scoring_system_prompt, meta_system_prompt.' });
+      }
+
+      // Validate — prompts must be strings, max 10 000 chars each
+      const MAX_PROMPT_LEN = 10_000;
+
+      if (scoring_system_prompt !== undefined && scoring_system_prompt !== null && scoring_system_prompt !== '') {
+        if (typeof scoring_system_prompt !== 'string') {
+          return reply.code(400).send({ error: 'scoring_system_prompt must be a string.' });
+        }
+        if (scoring_system_prompt.length > MAX_PROMPT_LEN) {
+          return reply.code(400).send({ error: `scoring_system_prompt exceeds maximum length (${MAX_PROMPT_LEN} chars).` });
+        }
+      }
+
+      if (meta_system_prompt !== undefined && meta_system_prompt !== null && meta_system_prompt !== '') {
+        if (typeof meta_system_prompt !== 'string') {
+          return reply.code(400).send({ error: 'meta_system_prompt must be a string.' });
+        }
+        if (meta_system_prompt.length > MAX_PROMPT_LEN) {
+          return reply.code(400).send({ error: `meta_system_prompt exceeds maximum length (${MAX_PROMPT_LEN} chars).` });
+        }
+      }
+
+      // Upsert or delete
+      if (scoring_system_prompt !== undefined) {
+        if (!scoring_system_prompt || scoring_system_prompt.trim() === '') {
+          // Reset to default — delete from app_config
+          await db('app_config').where({ key: 'scoring_system_prompt' }).del();
+        } else {
+          await db.raw(`
+            INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+          `, ['scoring_system_prompt', JSON.stringify(scoring_system_prompt)]);
+        }
+      }
+
+      if (meta_system_prompt !== undefined) {
+        if (!meta_system_prompt || meta_system_prompt.trim() === '') {
+          await db('app_config').where({ key: 'meta_system_prompt' }).del();
+        } else {
+          await db.raw(`
+            INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+          `, ['meta_system_prompt', JSON.stringify(meta_system_prompt)]);
+        }
+      }
+
+      // Flush cache
+      invalidateAiConfigCache();
+
+      app.log.info(`[${localTimestamp()}] AI system prompts updated`);
+
+      // Return updated state
+      const custom = await resolveCustomPrompts(db);
+      return reply.send({
+        scoring_system_prompt: custom.scoringSystemPrompt ?? null,
+        meta_system_prompt: custom.metaSystemPrompt ?? null,
+        scoring_is_custom: !!custom.scoringSystemPrompt,
+        meta_is_custom: !!custom.metaSystemPrompt,
+        default_scoring_system_prompt: DEFAULT_SCORE_SYSTEM_PROMPT,
+        default_meta_system_prompt: DEFAULT_META_SYSTEM_PROMPT,
       });
     },
   );

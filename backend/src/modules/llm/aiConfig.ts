@@ -55,4 +55,47 @@ export async function resolveAiConfig(db: Knex): Promise<AiConfig> {
 export function invalidateAiConfigCache(): void {
   _cache = null;
   _cacheTs = 0;
+  _promptCache = null;
+  _promptCacheTs = 0;
+}
+
+// ── Custom system prompt resolution ─────────────────────────
+
+export interface CustomPrompts {
+  /** Custom scoring system prompt. undefined = use built-in default. */
+  scoringSystemPrompt?: string;
+  /** Custom meta-analysis system prompt. undefined = use built-in default. */
+  metaSystemPrompt?: string;
+}
+
+let _promptCache: CustomPrompts | null = null;
+let _promptCacheTs = 0;
+
+/**
+ * Resolve custom system prompts from app_config.
+ * Returns undefined for each prompt that is not set (= use default).
+ */
+export async function resolveCustomPrompts(db: Knex): Promise<CustomPrompts> {
+  const now = Date.now();
+  if (_promptCache && now - _promptCacheTs < CACHE_TTL_MS) return _promptCache;
+
+  const rows = await db('app_config')
+    .whereIn('key', ['scoring_system_prompt', 'meta_system_prompt'])
+    .select('key', 'value');
+
+  const result: CustomPrompts = {};
+  for (const row of rows) {
+    let val = row.value;
+    if (typeof val === 'string') {
+      try { val = JSON.parse(val); } catch { /* use as-is */ }
+    }
+    if (typeof val === 'string' && val.trim() !== '') {
+      if (row.key === 'scoring_system_prompt') result.scoringSystemPrompt = val;
+      if (row.key === 'meta_system_prompt') result.metaSystemPrompt = val;
+    }
+  }
+
+  _promptCache = result;
+  _promptCacheTs = now;
+  return result;
 }

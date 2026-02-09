@@ -5,6 +5,7 @@ import { extractTemplatesAndDedup } from './dedup.js';
 import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
+import { resolveCustomPrompts } from '../llm/aiConfig.js';
 
 const SCORING_BATCH_SIZE = 20; // Max events per LLM call
 
@@ -25,6 +26,9 @@ export async function runPerEventScoringJob(
   const limit = options?.limit ?? 500;
 
   console.log(`[${localTimestamp()}] Per-event scoring job started (limit=${limit})`);
+
+  // Resolve custom system prompt (if configured by user)
+  const customPrompts = await resolveCustomPrompts(db);
 
   // 1. Fetch unscored events (events without any event_scores entry)
   let query = db('events')
@@ -93,6 +97,7 @@ export async function runPerEventScoringJob(
           eventsForLlm,
           system?.description ?? '',
           sourceLabels,
+          { systemPrompt: customPrompts.scoringSystemPrompt },
         );
 
         totalTokenInput += usage.token_input;

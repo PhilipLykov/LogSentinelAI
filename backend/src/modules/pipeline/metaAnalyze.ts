@@ -8,6 +8,7 @@ import {
 } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
+import { resolveCustomPrompts } from '../llm/aiConfig.js';
 
 const DEFAULT_W_META = 0.7;
 /** Number of previous window summaries to include as context. */
@@ -39,6 +40,9 @@ export async function metaAnalyzeWindow(
 
   const sources = await db('log_sources').where({ system_id: system.id }).select('label');
   const sourceLabels = sources.map((s: any) => s.label);
+
+  // Resolve custom system prompt (if configured by user)
+  const customPrompts = await resolveCustomPrompts(db);
 
   // ── Gather events in window ─────────────────────────────
   const events = await db('events')
@@ -111,6 +115,7 @@ export async function metaAnalyzeWindow(
     system.description ?? '',
     sourceLabels,
     context,
+    { systemPrompt: customPrompts.metaSystemPrompt },
   );
 
   // ── Persist everything in a transaction ─────────────────

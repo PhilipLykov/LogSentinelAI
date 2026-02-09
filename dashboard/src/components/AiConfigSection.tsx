@@ -1,5 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
-import { type AiConfigResponse, fetchAiConfig, updateAiConfig } from '../api';
+import {
+  type AiConfigResponse, fetchAiConfig, updateAiConfig,
+  type AiPromptsResponse, fetchAiPrompts, updateAiPrompts,
+} from '../api';
 
 interface AiConfigSectionProps {
   onAuthError: () => void;
@@ -7,7 +10,8 @@ interface AiConfigSectionProps {
 
 /**
  * AI Configuration panel — lets the admin set the OpenAI-compatible model,
- * base URL, and API key at runtime (stored in the DB, no restart needed).
+ * base URL, API key, and custom system prompts at runtime
+ * (stored in the DB, no restart needed).
  */
 export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [config, setConfig] = useState<AiConfigResponse | null>(null);
@@ -16,22 +20,35 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // Form fields
+  // Form fields — model / connection
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showKeyField, setShowKeyField] = useState(false);
 
+  // Prompt state
+  const [promptsData, setPromptsData] = useState<AiPromptsResponse | null>(null);
+  const [scoringPrompt, setScoringPrompt] = useState('');
+  const [metaPrompt, setMetaPrompt] = useState('');
+  const [showScoringPrompt, setShowScoringPrompt] = useState(false);
+  const [showMetaPrompt, setShowMetaPrompt] = useState(false);
+  const [savingPrompts, setSavingPrompts] = useState(false);
+  const [promptSuccess, setPromptSuccess] = useState('');
+  const [promptError, setPromptError] = useState('');
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const data = await fetchAiConfig();
+      const [data, prompts] = await Promise.all([fetchAiConfig(), fetchAiPrompts()]);
       setConfig(data);
       setModel(data.model);
       setBaseUrl(data.base_url);
       setApiKey('');
       setShowKeyField(false);
+      setPromptsData(prompts);
+      setScoringPrompt(prompts.scoring_system_prompt ?? prompts.default_scoring_system_prompt);
+      setMetaPrompt(prompts.meta_system_prompt ?? prompts.default_meta_system_prompt);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthError(); return; }
@@ -231,6 +248,196 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
           </button>
         </div>
       </form>
+
+      {/* ── System Prompts ─────────────────────────────────── */}
+      <div className="ai-prompts-section">
+        <h3>LLM System Prompts</h3>
+        <p className="ai-config-desc">
+          Customize the instructions sent to the LLM for event scoring and meta-analysis.
+          The system description of each monitored system is always included as a separate
+          <strong> SYSTEM SPECIFICATION</strong> block in the user content.
+          Leave empty or click "Reset to Default" to use the built-in prompt.
+        </p>
+
+        {promptError && (
+          <div className="error-msg" role="alert">
+            {promptError}
+            <button className="error-dismiss" onClick={() => setPromptError('')} aria-label="Dismiss error">&times;</button>
+          </div>
+        )}
+        {promptSuccess && (
+          <div className="success-msg" role="status">
+            {promptSuccess}
+            <button className="error-dismiss" onClick={() => setPromptSuccess('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+
+        {/* Scoring Prompt */}
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowScoringPrompt((v) => !v)}
+          >
+            <span className={`prompt-chevron${showScoringPrompt ? ' open' : ''}`}>&#9654;</span>
+            Scoring System Prompt
+            {promptsData?.scoring_is_custom && <span className="prompt-custom-badge">custom</span>}
+          </button>
+
+          {showScoringPrompt && (
+            <div className="prompt-editor">
+              <textarea
+                className="prompt-textarea"
+                value={scoringPrompt}
+                onChange={(e) => setScoringPrompt(e.target.value)}
+                rows={12}
+                spellCheck={false}
+              />
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingPrompts}
+                  onClick={async () => {
+                    setSavingPrompts(true);
+                    setPromptError('');
+                    setPromptSuccess('');
+                    try {
+                      const isDefault = scoringPrompt.trim() === promptsData?.default_scoring_system_prompt.trim();
+                      const updated = await updateAiPrompts({
+                        scoring_system_prompt: isDefault ? null : scoringPrompt,
+                      });
+                      setPromptsData(updated);
+                      setScoringPrompt(updated.scoring_system_prompt ?? updated.default_scoring_system_prompt);
+                      setPromptSuccess('Scoring prompt saved. Applies to the next pipeline run.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPromptError(msg);
+                    } finally {
+                      setSavingPrompts(false);
+                    }
+                  }}
+                >
+                  {savingPrompts ? 'Saving…' : 'Save Scoring Prompt'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingPrompts}
+                  onClick={async () => {
+                    if (!window.confirm('Reset the scoring prompt to the built-in default?')) return;
+                    setSavingPrompts(true);
+                    setPromptError('');
+                    setPromptSuccess('');
+                    try {
+                      const updated = await updateAiPrompts({ scoring_system_prompt: null });
+                      setPromptsData(updated);
+                      setScoringPrompt(updated.default_scoring_system_prompt);
+                      setPromptSuccess('Scoring prompt reset to default.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPromptError(msg);
+                    } finally {
+                      setSavingPrompts(false);
+                    }
+                  }}
+                >
+                  Reset to Default
+                </button>
+              </div>
+              <span className="form-hint">
+                This prompt is sent as the <code>system</code> message to the LLM when scoring individual events.
+                The user message will include the system specification, log sources, and events.
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Meta-Analysis Prompt */}
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowMetaPrompt((v) => !v)}
+          >
+            <span className={`prompt-chevron${showMetaPrompt ? ' open' : ''}`}>&#9654;</span>
+            Meta-Analysis System Prompt
+            {promptsData?.meta_is_custom && <span className="prompt-custom-badge">custom</span>}
+          </button>
+
+          {showMetaPrompt && (
+            <div className="prompt-editor">
+              <textarea
+                className="prompt-textarea"
+                value={metaPrompt}
+                onChange={(e) => setMetaPrompt(e.target.value)}
+                rows={16}
+                spellCheck={false}
+              />
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingPrompts}
+                  onClick={async () => {
+                    setSavingPrompts(true);
+                    setPromptError('');
+                    setPromptSuccess('');
+                    try {
+                      const isDefault = metaPrompt.trim() === promptsData?.default_meta_system_prompt.trim();
+                      const updated = await updateAiPrompts({
+                        meta_system_prompt: isDefault ? null : metaPrompt,
+                      });
+                      setPromptsData(updated);
+                      setMetaPrompt(updated.meta_system_prompt ?? updated.default_meta_system_prompt);
+                      setPromptSuccess('Meta-analysis prompt saved. Applies to the next pipeline run.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPromptError(msg);
+                    } finally {
+                      setSavingPrompts(false);
+                    }
+                  }}
+                >
+                  {savingPrompts ? 'Saving…' : 'Save Meta Prompt'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingPrompts}
+                  onClick={async () => {
+                    if (!window.confirm('Reset the meta-analysis prompt to the built-in default?')) return;
+                    setSavingPrompts(true);
+                    setPromptError('');
+                    setPromptSuccess('');
+                    try {
+                      const updated = await updateAiPrompts({ meta_system_prompt: null });
+                      setPromptsData(updated);
+                      setMetaPrompt(updated.default_meta_system_prompt);
+                      setPromptSuccess('Meta-analysis prompt reset to default.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPromptError(msg);
+                    } finally {
+                      setSavingPrompts(false);
+                    }
+                  }}
+                >
+                  Reset to Default
+                </button>
+              </div>
+              <span className="form-hint">
+                This prompt is sent as the <code>system</code> message during meta-analysis (window-level).
+                The user message includes the system specification, previous context, open findings, and current window events.
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
