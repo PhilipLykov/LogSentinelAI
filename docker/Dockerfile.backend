@@ -23,13 +23,16 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Install postgresql-client for pg_dump backup support (~5 MB)
 # pg_dump is backward-compatible: newer client works with older server
-RUN apk add --no-cache postgresql-client
+# Install su-exec for clean privilege dropping in entrypoint (same pattern as official postgres image)
+RUN apk add --no-cache postgresql-client su-exec
 
 # Knex migrations/seeds are compiled into dist/
 # Data directory for any local files + backups
 RUN mkdir -p /app/data/backups && chown -R appuser:appgroup /app/data
 
-USER appuser
+# Entrypoint fixes bind-mount permissions then drops to appuser (OWASP A05)
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV NODE_ENV=production
 ENV TZ=Europe/Chisinau
@@ -39,4 +42,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget -qO- http://localhost:3000/healthz || exit 1
 
+ENTRYPOINT ["entrypoint.sh"]
 CMD ["node", "dist/server.js"]
