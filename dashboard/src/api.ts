@@ -13,15 +13,24 @@ export function getStoredApiKey(): string {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'X-API-Key': getApiKey(),
+    ...init?.headers as Record<string, string>,
+  };
+
+  // Only set Content-Type for requests that carry a body (POST, PUT, PATCH).
+  // DELETE with Content-Type: application/json and no body causes Fastify to
+  // attempt JSON parsing on an empty payload, resulting in a 400 error.
+  const method = (init?.method ?? 'GET').toUpperCase();
+  if (['POST', 'PUT', 'PATCH'].includes(method)) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': getApiKey(),
-        ...init?.headers,
-      },
+      headers,
     });
   } catch {
     throw new Error('Network error — check your connection and try again.');
