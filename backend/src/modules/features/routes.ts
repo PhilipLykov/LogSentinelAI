@@ -6,6 +6,7 @@ import { generateComplianceExport, type ExportParams } from './exportCompliance.
 import { askQuestion } from './rag.js';
 import { resolveAiConfig, resolveCustomPrompts, invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
+import { runMaintenance, loadMaintenanceConfig } from '../maintenance/maintenanceJob.js';
 
 /**
  * Phase 7 feature routes: compliance export, RAG query, app config,
@@ -743,6 +744,160 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Failed to update meta-analysis config: ${err.message}`);
         return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
+
+  // ── Database Maintenance Config ────────────────────────────
+
+  const MAINT_CONFIG_DEFAULTS = {
+    default_retention_days: 90,
+    maintenance_interval_hours: 6,
+  };
+
+  /** GET /api/v1/maintenance-config — current maintenance settings and per-system retention. */
+  app.get(
+    '/api/v1/maintenance-config',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        const cfg = await loadMaintenanceConfig(db);
+
+        // Per-system retention info
+        const systems = await db('monitored_systems')
+          .select('id', 'name', 'retention_days')
+          .orderBy('name');
+
+        // DB size stats (best effort)
+        let dbStats: Record<string, unknown> = {};
+        try {
+          const sizeResult = await db.raw(`
+            SELECT
+              pg_size_pretty(pg_database_size(current_database())) as db_size,
+              (SELECT count(*) FROM events) as total_events,
+              (SELECT count(*) FROM event_scores) as total_event_scores,
+              (SELECT count(*) FROM findings) as total_findings,
+              (SELECT count(*) FROM message_templates) as total_templates
+          `);
+          if (sizeResult.rows?.length) {
+            dbStats = sizeResult.rows[0];
+          }
+        } catch {
+          // Some queries might fail — non-critical
+        }
+
+        return reply.send({
+          config: cfg,
+          defaults: MAINT_CONFIG_DEFAULTS,
+          systems: systems.map((s: any) => ({
+            id: s.id,
+            name: s.name,
+            retention_days: s.retention_days,
+            effective_retention_days: s.retention_days ?? cfg.default_retention_days,
+          })),
+          db_stats: dbStats,
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch maintenance config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/maintenance-config — update global maintenance settings. */
+  app.put(
+    '/api/v1/maintenance-config',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      if (body.default_retention_days !== undefined) {
+        const v = Number(body.default_retention_days);
+        if (!Number.isFinite(v) || v < 1 || v > 3650) {
+          return reply.code(400).send({ error: 'default_retention_days must be 1–3650.' });
+        }
+      }
+
+      if (body.maintenance_interval_hours !== undefined) {
+        const v = Number(body.maintenance_interval_hours);
+        if (!Number.isFinite(v) || v < 1 || v > 168) {
+          return reply.code(400).send({ error: 'maintenance_interval_hours must be 1–168 (max 7 days).' });
+        }
+      }
+
+      try {
+        if (body.default_retention_days !== undefined) {
+          await db.raw(`
+            INSERT INTO app_config (key, value) VALUES ('default_retention_days', ?::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+          `, [JSON.stringify(body.default_retention_days)]);
+        }
+
+        if (body.maintenance_interval_hours !== undefined) {
+          await db.raw(`
+            INSERT INTO app_config (key, value) VALUES ('maintenance_interval_hours', ?::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+          `, [JSON.stringify(body.maintenance_interval_hours)]);
+        }
+
+        app.log.info(`[${localTimestamp()}] Maintenance config updated`);
+
+        const cfg = await loadMaintenanceConfig(db);
+        return reply.send({ config: cfg, defaults: MAINT_CONFIG_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update maintenance config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
+
+  /** POST /api/v1/maintenance/run — trigger manual maintenance run. */
+  app.post(
+    '/api/v1/maintenance/run',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        app.log.info(`[${localTimestamp()}] Manual maintenance run triggered`);
+        const result = await runMaintenance(db);
+        return reply.send(result);
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Manual maintenance run failed: ${err.message}`);
+        return reply.code(500).send({ error: `Maintenance run failed: ${err.message}` });
+      }
+    },
+  );
+
+  /** GET /api/v1/maintenance/history — list recent maintenance runs. */
+  app.get<{ Querystring: { limit?: string } }>(
+    '/api/v1/maintenance/history',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const rawLimit = Number(request.query.limit ?? 20);
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 100) : 20;
+
+      try {
+        const rows = await db('maintenance_log')
+          .orderBy('started_at', 'desc')
+          .limit(limit)
+          .select('*');
+
+        // Parse details JSON
+        const runs = rows.map((r: any) => {
+          let details = r.details;
+          if (typeof details === 'string') {
+            try { details = JSON.parse(details); } catch { /* keep as-is */ }
+          }
+          return { ...r, details };
+        });
+
+        return reply.send(runs);
+      } catch (err: any) {
+        // Table might not exist yet
+        if (err.message.includes('does not exist')) {
+          return reply.send([]);
+        }
+        app.log.error(`[${localTimestamp()}] Failed to fetch maintenance history: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch history.' });
       }
     },
   );

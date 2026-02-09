@@ -6,6 +6,7 @@ import { buildApp } from './app.js';
 import { OpenAiAdapter } from './modules/llm/adapter.js';
 import { startPipelineScheduler } from './modules/pipeline/orchestrator.js';
 import { startConnectorScheduler } from './modules/connectors/runner.js';
+import { startMaintenanceScheduler } from './modules/maintenance/maintenanceJob.js';
 
 /**
  * Parse a millisecond interval from an env var, with safe default.
@@ -48,9 +49,15 @@ async function main(): Promise<void> {
   const connectorIntervalMs = envIntervalMs(process.env.CONNECTOR_POLL_INTERVAL_MS, 60_000);
   const connectorScheduler = startConnectorScheduler(db, connectorIntervalMs);
 
+  // 6. Start database maintenance scheduler (retention cleanup, VACUUM, REINDEX)
+  //    Default check interval: 30 minutes (actual run frequency governed by maintenance_interval_hours config)
+  const maintenanceCheckMs = envIntervalMs(process.env.MAINTENANCE_CHECK_INTERVAL_MS, 30 * 60 * 1000);
+  const maintenanceScheduler = startMaintenanceScheduler(db, maintenanceCheckMs);
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`[${localTimestamp()}] Received ${signal}, shutting down…`);
+    maintenanceScheduler.stop();
     connectorScheduler.stop();
     pipelineScheduler?.stop();
     try {

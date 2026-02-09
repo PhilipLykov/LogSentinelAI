@@ -16,12 +16,13 @@ import { SourceForm } from './SourceForm';
 import { ConfirmDialog } from './ConfirmDialog';
 import { AiConfigSection } from './AiConfigSection';
 import { NotificationsSection } from './NotificationsSection';
+import { DatabaseMaintenanceSection } from './DatabaseMaintenanceSection';
 
 interface SettingsViewProps {
   onAuthError: () => void;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'notifications';
+type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database';
 
 type Modal =
   | { kind: 'create-system' }
@@ -94,11 +95,11 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
   }, [selectedSystemId, loadSources]);
 
   // ── System CRUD handlers ────────────────────────────────────
-  const handleCreateSystem = async (name: string, description: string) => {
+  const handleCreateSystem = async (name: string, description: string, retentionDays: number | null) => {
     setSaving(true);
     setError('');
     try {
-      const created = await createSystem({ name, description });
+      const created = await createSystem({ name, description, retention_days: retentionDays });
       setSystems((prev) => [...prev, created]);
       setSelectedSystemId(created.id);
       setModal(null);
@@ -110,11 +111,11 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
     }
   };
 
-  const handleUpdateSystem = async (id: string, name: string, description: string) => {
+  const handleUpdateSystem = async (id: string, name: string, description: string, retentionDays: number | null) => {
     setSaving(true);
     setError('');
     try {
-      const updated = await updateSystem(id, { name, description });
+      const updated = await updateSystem(id, { name, description, retention_days: retentionDays });
       setSystems((prev) => prev.map((s) => (s.id === id ? updated : s)));
       setModal(null);
     } catch (err: unknown) {
@@ -229,6 +230,14 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
         >
           Notifications
         </button>
+        <button
+          className={`settings-tab${activeTab === 'database' ? ' active' : ''}`}
+          onClick={() => setActiveTab('database')}
+          role="tab"
+          aria-selected={activeTab === 'database'}
+        >
+          Database
+        </button>
       </div>
 
       {/* ── Tab content ── */}
@@ -236,6 +245,8 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
         <AiConfigSection onAuthError={onAuthError} />
       ) : activeTab === 'notifications' ? (
         <NotificationsSection onAuthError={onAuthError} />
+      ) : activeTab === 'database' ? (
+        <DatabaseMaintenanceSection onAuthError={onAuthError} />
       ) : (
         /* ── Systems & Sources tab (existing content) ── */
         <>
@@ -433,7 +444,7 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
           {modal?.kind === 'create-system' && (
             <SystemForm
               title="Create Monitored System"
-              onSave={(name, desc) => handleCreateSystem(name, desc)}
+              onSave={(name, desc, retention) => handleCreateSystem(name, desc, retention)}
               onCancel={() => setModal(null)}
               saving={saving}
             />
@@ -444,7 +455,8 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
               title="Edit System"
               initialName={modal.system.name}
               initialDescription={modal.system.description}
-              onSave={(name, desc) => handleUpdateSystem(modal.system.id, name, desc)}
+              initialRetentionDays={modal.system.retention_days}
+              onSave={(name, desc, retention) => handleUpdateSystem(modal.system.id, name, desc, retention)}
               onCancel={() => setModal(null)}
               saving={saving}
             />

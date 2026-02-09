@@ -71,6 +71,7 @@ export interface MonitoredSystem {
   id: string;
   name: string;
   description: string;
+  retention_days: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -185,7 +186,7 @@ export async function fetchSystems(): Promise<MonitoredSystem[]> {
   return apiFetch('/api/v1/systems');
 }
 
-export async function createSystem(data: { name: string; description?: string }): Promise<MonitoredSystem> {
+export async function createSystem(data: { name: string; description?: string; retention_days?: number | null }): Promise<MonitoredSystem> {
   return apiFetch('/api/v1/systems', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -194,7 +195,7 @@ export async function createSystem(data: { name: string; description?: string })
 
 export async function updateSystem(
   id: string,
-  data: { name?: string; description?: string },
+  data: { name?: string; description?: string; retention_days?: number | null },
 ): Promise<MonitoredSystem> {
   return apiFetch(`/api/v1/systems/${id}`, {
     method: 'PUT',
@@ -816,6 +817,72 @@ export async function updateMetaAnalysisConfig(data: Partial<MetaAnalysisConfig>
     method: 'PUT',
     body: JSON.stringify(data),
   });
+}
+
+// ── Database Maintenance ─────────────────────────────────────
+
+export interface MaintenanceConfig {
+  default_retention_days: number;
+  maintenance_interval_hours: number;
+}
+
+export interface MaintenanceSystemInfo {
+  id: string;
+  name: string;
+  retention_days: number | null;
+  effective_retention_days: number;
+}
+
+export interface MaintenanceConfigResponse {
+  config: MaintenanceConfig;
+  defaults: MaintenanceConfig;
+  systems: MaintenanceSystemInfo[];
+  db_stats: Record<string, unknown>;
+}
+
+export interface MaintenanceRunResult {
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  events_deleted: number;
+  event_scores_deleted: number;
+  systems_cleaned: Array<{ system_id: string; system_name: string; retention_days: number; events_deleted: number }>;
+  vacuum_ran: boolean;
+  reindex_ran: boolean;
+  errors: string[];
+}
+
+export interface MaintenanceLogEntry {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  events_deleted: number;
+  event_scores_deleted: number;
+  status: string;
+  details: MaintenanceRunResult | null;
+}
+
+export async function fetchMaintenanceConfig(): Promise<MaintenanceConfigResponse> {
+  return apiFetch('/api/v1/maintenance-config');
+}
+
+export async function updateMaintenanceConfig(data: Partial<MaintenanceConfig>): Promise<{ config: MaintenanceConfig; defaults: MaintenanceConfig }> {
+  return apiFetch('/api/v1/maintenance-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function triggerMaintenanceRun(): Promise<MaintenanceRunResult> {
+  return apiFetch('/api/v1/maintenance/run', {
+    method: 'POST',
+  });
+}
+
+export async function fetchMaintenanceHistory(limit?: number): Promise<MaintenanceLogEntry[]> {
+  const qs = limit ? `?limit=${limit}` : '';
+  return apiFetch(`/api/v1/maintenance/history${qs}`);
 }
 
 /**

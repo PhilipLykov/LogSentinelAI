@@ -3682,3 +3682,183 @@ tr.event-row-acked:hover {
     flex-direction: column;
   }
 }
+
+/* ── Database Maintenance Section ───────────────────────────── */
+
+.db-maintenance-section {
+  padding: 8px 0;
+}
+
+.db-maintenance-section .section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.db-maintenance-section .section-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.db-stats-banner {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding: 14px 18px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.db-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 110px;
+}
+
+.db-stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.db-stat-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.db-config-section {
+  margin-bottom: 24px;
+  padding: 16px 18px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.db-config-section h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.db-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.db-config-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.db-run-result {
+  margin-bottom: 20px;
+  padding: 14px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.db-run-result h4 {
+  font-size: 0.92rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--accent);
+}
+
+.db-run-result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  font-size: 0.88rem;
+}
+
+.db-run-systems, .db-run-errors {
+  margin-top: 10px;
+  font-size: 0.85rem;
+}
+
+.db-run-systems ul, .db-run-errors ul {
+  margin: 4px 0 0 16px;
+  padding: 0;
+}
+
+.db-run-systems li, .db-run-errors li {
+  margin-bottom: 2px;
+}
+
+.db-retention-table,
+.db-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.db-retention-table th,
+.db-retention-table td,
+.db-history-table th,
+.db-history-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.db-retention-table th,
+.db-history-table th {
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.db-last-run-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+  font-size: 0.88rem;
+}
+
+.db-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.db-status-success {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.db-status-completed_with_errors {
+  background: rgba(234, 179, 8, 0.15);
+  color: #b45309;
+}
+
+.db-status-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+.db-status-running {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.text-muted {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}

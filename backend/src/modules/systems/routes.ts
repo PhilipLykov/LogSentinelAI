@@ -38,10 +38,18 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
     '/api/v1/systems',
     { preHandler: requireAuth('admin') },
     async (request, reply) => {
-      const { name, description } = request.body ?? {};
+      const { name, description, retention_days } = request.body ?? {};
 
       if (!name || typeof name !== 'string' || name.trim().length === 0) {
         return reply.code(400).send({ error: '"name" is required and must be a non-empty string.' });
+      }
+
+      // Validate retention_days if provided
+      if (retention_days !== undefined && retention_days !== null) {
+        const rd = Number(retention_days);
+        if (!Number.isFinite(rd) || rd < 0 || rd > 3650) {
+          return reply.code(400).send({ error: '"retention_days" must be 0–3650 (0 = keep forever, null = use global default).' });
+        }
       }
 
       const id = uuidv4();
@@ -51,6 +59,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         id,
         name: name.trim(),
         description: (description ?? '').trim(),
+        retention_days: retention_days !== undefined ? retention_days : null,
         created_at: now,
         updated_at: now,
       });
@@ -70,7 +79,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       const existing = await db('monitored_systems').where({ id }).first();
       if (!existing) return reply.code(404).send({ error: 'System not found' });
 
-      const { name, description } = request.body ?? {};
+      const { name, description, retention_days } = request.body ?? {};
       const updates: Record<string, any> = { updated_at: new Date().toISOString() };
 
       if (name !== undefined) {
@@ -81,6 +90,17 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       }
       if (description !== undefined) {
         updates.description = (typeof description === 'string' ? description : '').trim();
+      }
+      if (retention_days !== undefined) {
+        if (retention_days === null) {
+          updates.retention_days = null;
+        } else {
+          const rd = Number(retention_days);
+          if (!Number.isFinite(rd) || rd < 0 || rd > 3650) {
+            return reply.code(400).send({ error: '"retention_days" must be 0–3650 (0 = keep forever, null = use global default).' });
+          }
+          updates.retention_days = rd;
+        }
       }
 
       await db('monitored_systems').where({ id }).update(updates);

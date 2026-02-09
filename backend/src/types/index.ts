@@ -53,6 +53,7 @@ export interface MonitoredSystem {
   id: string;
   name: string;
   description: string;
+  retention_days: number | null; // NULL = use global default
   created_at: string;
   updated_at: string;
 }
@@ -60,11 +61,13 @@ export interface MonitoredSystem {
 export interface CreateSystemBody {
   name: string;
   description?: string;
+  retention_days?: number | null;
 }
 
 export interface UpdateSystemBody {
   name?: string;
   description?: string;
+  retention_days?: number | null;
 }
 
 // ── Log source ───────────────────────────────────────────────

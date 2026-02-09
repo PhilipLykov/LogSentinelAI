@@ -4,7 +4,8 @@ interface SystemFormProps {
   title: string;
   initialName?: string;
   initialDescription?: string;
-  onSave: (name: string, description: string) => void;
+  initialRetentionDays?: number | null;
+  onSave: (name: string, description: string, retentionDays: number | null) => void;
   onCancel: () => void;
   saving: boolean;
 }
@@ -13,12 +14,19 @@ export function SystemForm({
   title,
   initialName = '',
   initialDescription = '',
+  initialRetentionDays = null,
   onSave,
   onCancel,
   saving,
 }: SystemFormProps) {
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
+  const [retentionMode, setRetentionMode] = useState<'global' | 'custom'>(
+    initialRetentionDays !== null && initialRetentionDays !== undefined ? 'custom' : 'global',
+  );
+  const [retentionDays, setRetentionDays] = useState<string>(
+    initialRetentionDays !== null && initialRetentionDays !== undefined ? String(initialRetentionDays) : '',
+  );
   const [nameError, setNameError] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -44,7 +52,16 @@ export function SystemForm({
       return;
     }
     setNameError('');
-    onSave(trimmed, description.trim());
+
+    let finalRetention: number | null = null;
+    if (retentionMode === 'custom') {
+      const rd = Number(retentionDays);
+      if (Number.isFinite(rd) && rd >= 0) {
+        finalRetention = rd;
+      }
+    }
+
+    onSave(trimmed, description.trim(), finalRetention);
   };
 
   return (
@@ -81,6 +98,49 @@ export function SystemForm({
               placeholder="Optional description of what this system is"
               rows={3}
             />
+          </div>
+
+          <div className="form-group">
+            <label>Data Retention</label>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="retention-mode"
+                  checked={retentionMode === 'global'}
+                  onChange={() => setRetentionMode('global')}
+                />
+                Use global default
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="retention-mode"
+                  checked={retentionMode === 'custom'}
+                  onChange={() => setRetentionMode('custom')}
+                />
+                Custom
+              </label>
+            </div>
+            {retentionMode === 'custom' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={retentionDays}
+                  onChange={(e) => setRetentionDays(e.target.value)}
+                  placeholder="90"
+                  style={{ width: '100px' }}
+                />
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  days {retentionDays === '0' && '(keep forever)'}
+                </span>
+              </div>
+            )}
+            <span className="field-hint" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+              How long to keep events for this system. Set to 0 to keep forever.
+            </span>
           </div>
 
           <div className="modal-actions">
