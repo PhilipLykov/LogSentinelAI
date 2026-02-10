@@ -186,6 +186,53 @@ export async function deleteUser(id: string): Promise<void> {
   return apiFetch(`/api/v1/users/${id}`, { method: 'DELETE' });
 }
 
+// ── Role Management API ─────────────────────────────────────
+
+export interface RoleInfo {
+  name: string;
+  display_name: string;
+  description: string;
+  is_system: boolean;
+  permissions: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PermissionInfo {
+  permission: string;
+  label: string;
+  category: string;
+}
+
+export async function fetchRoles(): Promise<RoleInfo[]> {
+  return apiFetch('/api/v1/roles');
+}
+
+export async function fetchAllPermissions(): Promise<PermissionInfo[]> {
+  return apiFetch('/api/v1/roles/permissions');
+}
+
+export async function createRole(data: {
+  name: string;
+  display_name: string;
+  description?: string;
+  permissions?: string[];
+}): Promise<RoleInfo> {
+  return apiFetch('/api/v1/roles', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateRole(name: string, data: {
+  display_name?: string;
+  description?: string;
+  permissions?: string[];
+}): Promise<RoleInfo> {
+  return apiFetch(`/api/v1/roles/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+export async function deleteRole(name: string): Promise<void> {
+  return apiFetch(`/api/v1/roles/${name}`, { method: 'DELETE' });
+}
+
 // ── API Key Management API ───────────────────────────────────
 
 export interface ApiKeyInfo {

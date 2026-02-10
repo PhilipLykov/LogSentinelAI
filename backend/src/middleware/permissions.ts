@@ -2,11 +2,15 @@
  * Granular permission constants and role-to-permission mappings.
  *
  * Permissions follow the pattern `resource:action`.
- * Roles map to a set of permissions they are granted.
+ * Role permissions are stored in the database (roles / role_permissions tables)
+ * and cached in memory with a short TTL.
  *
  * API keys map their legacy scope to a permission set so
  * they can coexist with the new user-based auth.
  */
+
+import { getDb } from '../db/index.js';
+import { localTimestamp } from '../config/index.js';
 
 // ── Permission constants ─────────────────────────────────────
 
@@ -41,6 +45,9 @@ export const PERMISSIONS = {
   // User Management
   USERS_MANAGE: 'users:manage',
 
+  // Role Management
+  ROLES_MANAGE: 'roles:manage',
+
   // API Key Management
   API_KEYS_MANAGE: 'api_keys:manage',
 
@@ -63,129 +70,155 @@ export const PERMISSIONS = {
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
-// ── User roles ───────────────────────────────────────────────
+/**
+ * All known permissions with human-readable labels and categories.
+ * Used by the frontend roles editor.
+ */
+export const ALL_PERMISSIONS: ReadonlyArray<{
+  permission: Permission;
+  label: string;
+  category: string;
+}> = [
+  { permission: 'dashboard:view',        label: 'View Dashboard',                category: 'Dashboard' },
+  { permission: 'events:view',           label: 'View Events',                   category: 'Events' },
+  { permission: 'events:acknowledge',    label: 'Acknowledge Events',            category: 'Events' },
+  { permission: 'systems:view',          label: 'View Systems & Sources',        category: 'Systems' },
+  { permission: 'systems:manage',        label: 'Manage Systems & Sources',      category: 'Systems' },
+  { permission: 'ai_config:view',        label: 'View AI Configuration',         category: 'AI' },
+  { permission: 'ai_config:manage',      label: 'Manage AI Configuration',       category: 'AI' },
+  { permission: 'notifications:view',    label: 'View Notifications & Alerts',   category: 'Notifications' },
+  { permission: 'notifications:manage',  label: 'Manage Notifications & Alerts', category: 'Notifications' },
+  { permission: 'database:view',         label: 'View Database Status',          category: 'Database' },
+  { permission: 'database:manage',       label: 'Manage Database & Backups',     category: 'Database' },
+  { permission: 'privacy:view',          label: 'View Privacy Settings',         category: 'Privacy' },
+  { permission: 'privacy:manage',        label: 'Manage Privacy Settings',       category: 'Privacy' },
+  { permission: 'users:manage',          label: 'Manage Users',                  category: 'Administration' },
+  { permission: 'roles:manage',          label: 'Manage Roles & Permissions',    category: 'Administration' },
+  { permission: 'api_keys:manage',       label: 'Manage API Keys',              category: 'Administration' },
+  { permission: 'audit:view',            label: 'View Audit Log',               category: 'Audit' },
+  { permission: 'audit:export',          label: 'Export Audit Log',             category: 'Audit' },
+  { permission: 'rag:use',              label: 'Use RAG / Ask AI',             category: 'AI' },
+  { permission: 'ai_usage:view',         label: 'View AI Usage & Costs',        category: 'AI' },
+  { permission: 'compliance:export',     label: 'Export Compliance Data',       category: 'Audit' },
+  { permission: 'ingest',               label: 'Ingest Events (API key only)',  category: 'Ingest' },
+];
 
-export type UserRole = 'administrator' | 'auditor' | 'monitoring_agent';
+// ── User roles (kept for backward compat type, but DB is the source of truth)
 
-export const USER_ROLES: readonly UserRole[] = ['administrator', 'auditor', 'monitoring_agent'] as const;
+export type UserRole = string; // Now dynamic — any role name from the DB
 
-// ── Role → Permission mapping ────────────────────────────────
+// ── Hardcoded fallback (used if DB is not yet migrated) ──────
 
-const P = PERMISSIONS;
-
-export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
+const FALLBACK_ROLE_PERMISSIONS: Record<string, ReadonlySet<Permission>> = {
   administrator: new Set<Permission>([
-    P.DASHBOARD_VIEW,
-    P.EVENTS_VIEW,
-    P.EVENTS_ACKNOWLEDGE,
-    P.SYSTEMS_VIEW,
-    P.SYSTEMS_MANAGE,
-    P.AI_CONFIG_VIEW,
-    P.AI_CONFIG_MANAGE,
-    P.NOTIFICATIONS_VIEW,
-    P.NOTIFICATIONS_MANAGE,
-    P.DATABASE_VIEW,
-    P.DATABASE_MANAGE,
-    P.PRIVACY_VIEW,
-    P.PRIVACY_MANAGE,
-    P.USERS_MANAGE,
-    P.API_KEYS_MANAGE,
-    P.AUDIT_VIEW,
-    P.AUDIT_EXPORT,
-    P.RAG_USE,
-    P.AI_USAGE_VIEW,
-    P.COMPLIANCE_EXPORT,
-    // Note: INGEST is API-key-only, not user-session based
+    PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW, PERMISSIONS.EVENTS_ACKNOWLEDGE,
+    PERMISSIONS.SYSTEMS_VIEW, PERMISSIONS.SYSTEMS_MANAGE,
+    PERMISSIONS.AI_CONFIG_VIEW, PERMISSIONS.AI_CONFIG_MANAGE,
+    PERMISSIONS.NOTIFICATIONS_VIEW, PERMISSIONS.NOTIFICATIONS_MANAGE,
+    PERMISSIONS.DATABASE_VIEW, PERMISSIONS.DATABASE_MANAGE,
+    PERMISSIONS.PRIVACY_VIEW, PERMISSIONS.PRIVACY_MANAGE,
+    PERMISSIONS.USERS_MANAGE, PERMISSIONS.ROLES_MANAGE, PERMISSIONS.API_KEYS_MANAGE,
+    PERMISSIONS.AUDIT_VIEW, PERMISSIONS.AUDIT_EXPORT,
+    PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW, PERMISSIONS.COMPLIANCE_EXPORT,
   ]),
-
   auditor: new Set<Permission>([
-    P.DASHBOARD_VIEW,
-    P.EVENTS_VIEW,
-    // No EVENTS_ACKNOWLEDGE
-    P.SYSTEMS_VIEW,
-    // No SYSTEMS_MANAGE
-    P.AI_CONFIG_VIEW,
-    // No AI_CONFIG_MANAGE
-    P.NOTIFICATIONS_VIEW,
-    // No NOTIFICATIONS_MANAGE
-    P.DATABASE_VIEW,
-    // No DATABASE_MANAGE
-    P.PRIVACY_VIEW,
-    // No PRIVACY_MANAGE
-    // No USERS_MANAGE
-    // No API_KEYS_MANAGE
-    P.AUDIT_VIEW,
-    P.AUDIT_EXPORT,
-    P.RAG_USE,
-    P.AI_USAGE_VIEW,
-    P.COMPLIANCE_EXPORT,
+    PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW,
+    PERMISSIONS.SYSTEMS_VIEW, PERMISSIONS.AI_CONFIG_VIEW,
+    PERMISSIONS.NOTIFICATIONS_VIEW, PERMISSIONS.DATABASE_VIEW,
+    PERMISSIONS.PRIVACY_VIEW,
+    PERMISSIONS.AUDIT_VIEW, PERMISSIONS.AUDIT_EXPORT,
+    PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW, PERMISSIONS.COMPLIANCE_EXPORT,
   ]),
-
   monitoring_agent: new Set<Permission>([
-    P.DASHBOARD_VIEW,
-    P.EVENTS_VIEW,
-    P.EVENTS_ACKNOWLEDGE,
-    P.SYSTEMS_VIEW,
-    // No SYSTEMS_MANAGE
-    // No AI_CONFIG_*
-    // No NOTIFICATIONS_*
-    // No DATABASE_*
-    // No PRIVACY_*
-    // No USERS_MANAGE
-    // No API_KEYS_MANAGE
-    // No AUDIT_*
-    P.RAG_USE,
-    P.AI_USAGE_VIEW,
-    // No COMPLIANCE_EXPORT
+    PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW, PERMISSIONS.EVENTS_ACKNOWLEDGE,
+    PERMISSIONS.SYSTEMS_VIEW, PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW,
   ]),
 };
+
+// ── In-memory cache for DB-backed permissions ────────────────
+
+interface CacheEntry {
+  permissions: ReadonlySet<Permission>;
+  ts: number;
+}
+
+const roleCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 30_000; // 30 seconds
+
+/**
+ * Invalidate the in-memory permission cache for a specific role or all roles.
+ */
+export function invalidateRoleCache(roleName?: string): void {
+  if (roleName) {
+    roleCache.delete(roleName);
+  } else {
+    roleCache.clear();
+  }
+}
+
+/**
+ * Get the permission set for a user role.
+ * Reads from database with in-memory caching.
+ * Falls back to hardcoded map if the roles table doesn't exist yet.
+ */
+export async function getPermissionsForRole(role: string): Promise<ReadonlySet<Permission>> {
+  // Check cache
+  const cached = roleCache.get(role);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return cached.permissions;
+  }
+
+  try {
+    const db = getDb();
+    const rows: Array<{ permission: string }> = await db('role_permissions')
+      .where({ role_name: role })
+      .select('permission');
+
+    const perms = new Set<Permission>(rows.map((r) => r.permission as Permission));
+
+    roleCache.set(role, { permissions: perms, ts: Date.now() });
+    return perms;
+  } catch (err) {
+    // Table may not exist yet (pre-migration) — use fallback
+    console.warn(`[${localTimestamp()}] WARN: Could not read role_permissions from DB, using fallback. ${err}`);
+    return FALLBACK_ROLE_PERMISSIONS[role] ?? new Set();
+  }
+}
+
+/**
+ * Synchronous fallback for contexts where async is not possible.
+ * Returns cached permissions or hardcoded fallback.
+ */
+export function getPermissionsForRoleSync(role: string): ReadonlySet<Permission> {
+  const cached = roleCache.get(role);
+  if (cached) return cached.permissions;
+  return FALLBACK_ROLE_PERMISSIONS[role] ?? new Set();
+}
 
 // ── API key scope → Permission mapping ───────────────────────
 // Backward compatibility: map legacy scopes to permissions
 
 export const API_KEY_SCOPE_PERMISSIONS: Record<string, ReadonlySet<Permission>> = {
   admin: new Set<Permission>([
-    P.DASHBOARD_VIEW,
-    P.EVENTS_VIEW,
-    P.EVENTS_ACKNOWLEDGE,
-    P.SYSTEMS_VIEW,
-    P.SYSTEMS_MANAGE,
-    P.AI_CONFIG_VIEW,
-    P.AI_CONFIG_MANAGE,
-    P.NOTIFICATIONS_VIEW,
-    P.NOTIFICATIONS_MANAGE,
-    P.DATABASE_VIEW,
-    P.DATABASE_MANAGE,
-    P.PRIVACY_VIEW,
-    P.PRIVACY_MANAGE,
-    P.USERS_MANAGE,
-    P.API_KEYS_MANAGE,
-    P.AUDIT_VIEW,
-    P.AUDIT_EXPORT,
-    P.RAG_USE,
-    P.AI_USAGE_VIEW,
-    P.COMPLIANCE_EXPORT,
-    P.INGEST,
+    PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW, PERMISSIONS.EVENTS_ACKNOWLEDGE,
+    PERMISSIONS.SYSTEMS_VIEW, PERMISSIONS.SYSTEMS_MANAGE,
+    PERMISSIONS.AI_CONFIG_VIEW, PERMISSIONS.AI_CONFIG_MANAGE,
+    PERMISSIONS.NOTIFICATIONS_VIEW, PERMISSIONS.NOTIFICATIONS_MANAGE,
+    PERMISSIONS.DATABASE_VIEW, PERMISSIONS.DATABASE_MANAGE,
+    PERMISSIONS.PRIVACY_VIEW, PERMISSIONS.PRIVACY_MANAGE,
+    PERMISSIONS.USERS_MANAGE, PERMISSIONS.ROLES_MANAGE, PERMISSIONS.API_KEYS_MANAGE,
+    PERMISSIONS.AUDIT_VIEW, PERMISSIONS.AUDIT_EXPORT,
+    PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW, PERMISSIONS.COMPLIANCE_EXPORT,
+    PERMISSIONS.INGEST,
   ]),
-
-  ingest: new Set<Permission>([
-    P.INGEST,
-  ]),
-
+  ingest: new Set<Permission>([PERMISSIONS.INGEST]),
   read: new Set<Permission>([
-    P.DASHBOARD_VIEW,
-    P.EVENTS_VIEW,
-    P.SYSTEMS_VIEW,
-    P.RAG_USE,
-    P.AI_USAGE_VIEW,
+    PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW,
+    PERMISSIONS.SYSTEMS_VIEW, PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW,
   ]),
-
   dashboard: new Set<Permission>([
-    P.DASHBOARD_VIEW,
-    P.EVENTS_VIEW,
-    P.SYSTEMS_VIEW,
-    P.RAG_USE,
-    P.AI_USAGE_VIEW,
+    PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW,
+    PERMISSIONS.SYSTEMS_VIEW, PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW,
   ]),
 };
 
@@ -197,13 +230,6 @@ export function hasPermission(
   required: Permission,
 ): boolean {
   return granted.has(required);
-}
-
-/**
- * Get the permission set for a user role.
- */
-export function getPermissionsForRole(role: UserRole): ReadonlySet<Permission> {
-  return ROLE_PERMISSIONS[role] ?? new Set();
 }
 
 /**

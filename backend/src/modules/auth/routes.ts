@@ -144,7 +144,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         session_id: sessionId,
       });
 
-      const permissions = Array.from(getPermissionsForRole(user.role));
+      const permissions = Array.from(await getPermissionsForRole(user.role));
 
       return reply.send({
         token: plainToken,
@@ -189,7 +189,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       if (request.currentUser) {
-        const permissions = Array.from(getPermissionsForRole(request.currentUser.role));
+        const permissions = Array.from(await getPermissionsForRole(request.currentUser.role));
         return reply.send({
           user: {
             id: request.currentUser.id,

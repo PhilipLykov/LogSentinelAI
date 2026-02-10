@@ -5,7 +5,6 @@ import { getDb } from '../db/index.js';
 import { localTimestamp } from '../config/index.js';
 import {
   type Permission,
-  type UserRole,
   getPermissionsForRole,
   getPermissionsForScope,
   hasPermission,
@@ -67,7 +66,7 @@ export function requireAuth(permission: Permission) {
             .first();
 
           if (user) {
-            const userPerms = getPermissionsForRole(user.role as UserRole);
+            const userPerms = await getPermissionsForRole(user.role);
 
             if (!hasPermission(userPerms, permission)) {
               console.log(

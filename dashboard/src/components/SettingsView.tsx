@@ -22,6 +22,7 @@ import { PrivacySection } from './PrivacySection';
 import { UserManagementSection } from './UserManagementSection';
 import { ApiKeyManagementSection } from './ApiKeyManagementSection';
 import { AuditLogSection } from './AuditLogSection';
+import { RoleManagementSection } from './RoleManagementSection';
 import { hasPermission } from '../App';
 
 interface SettingsViewProps {
@@ -29,7 +30,7 @@ interface SettingsViewProps {
   currentUser?: CurrentUser | null;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'privacy' | 'users' | 'api-keys' | 'audit-log';
+type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
 
 type Modal =
   | { kind: 'create-system' }
@@ -48,6 +49,7 @@ function getDefaultTab(user: CurrentUser | null | undefined): SettingsTab {
   if (hp('database:view')) return 'database';
   if (hp('privacy:view')) return 'privacy';
   if (hp('users:manage')) return 'users';
+  if (hp('roles:manage')) return 'roles';
   if (hp('api_keys:manage')) return 'api-keys';
   if (hp('audit:view')) return 'audit-log';
   return 'systems'; // fallback
@@ -286,6 +288,16 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
             Users
           </button>
         )}
+        {hasPermission(currentUser ?? null, 'roles:manage') && (
+          <button
+            className={`settings-tab${activeTab === 'roles' ? ' active' : ''}`}
+            onClick={() => setActiveTab('roles')}
+            role="tab"
+            aria-selected={activeTab === 'roles'}
+          >
+            Roles
+          </button>
+        )}
         {hasPermission(currentUser ?? null, 'api_keys:manage') && (
           <button
             className={`settings-tab${activeTab === 'api-keys' ? ' active' : ''}`}
@@ -319,6 +331,8 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         <PrivacySection onAuthError={onAuthError} />
       ) : activeTab === 'users' ? (
         <UserManagementSection onAuthError={onAuthError} currentUser={currentUser} />
+      ) : activeTab === 'roles' ? (
+        <RoleManagementSection onAuthError={onAuthError} />
       ) : activeTab === 'api-keys' ? (
         <ApiKeyManagementSection onAuthError={onAuthError} />
       ) : activeTab === 'audit-log' ? (

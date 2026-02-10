@@ -2,19 +2,15 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   type UserInfo,
   type CurrentUser,
+  type RoleInfo,
   fetchUsers,
+  fetchRoles,
   createUser,
   updateUser,
   resetUserPassword,
   toggleUserActive,
   deleteUser,
 } from '../api';
-
-const ROLES = [
-  { value: 'administrator', label: 'Administrator' },
-  { value: 'auditor', label: 'Auditor' },
-  { value: 'monitoring_agent', label: 'Monitoring Agent' },
-];
 
 interface Props {
   onAuthError: () => void;
@@ -23,6 +19,7 @@ interface Props {
 
 export function UserManagementSection({ onAuthError, currentUser }: Props) {
   const [users, setUsers] = useState<UserInfo[]>([]);
+  const [roles, setRoles] = useState<RoleInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -51,8 +48,9 @@ export function UserManagementSection({ onAuthError, currentUser }: Props) {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await fetchUsers();
-      setUsers(data);
+      const [usersData, rolesData] = await Promise.all([fetchUsers(), fetchRoles().catch(() => [])]);
+      setUsers(usersData);
+      if (rolesData.length > 0) setRoles(rolesData);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) onAuthError();
@@ -234,7 +232,7 @@ export function UserManagementSection({ onAuthError, currentUser }: Props) {
               <div className="form-group">
                 <label>Role</label>
                 <select value={newRole} onChange={(e) => setNewRole(e.target.value)}>
-                  {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  {roles.map((r) => <option key={r.name} value={r.name}>{r.display_name}</option>)}
                 </select>
               </div>
             </div>
@@ -276,11 +274,11 @@ export function UserManagementSection({ onAuthError, currentUser }: Props) {
                   <td>
                     {editingId === u.id ? (
                       <select value={editRole} onChange={(e) => setEditRole(e.target.value)} className="admin-inline-select">
-                        {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                        {roles.map((r) => <option key={r.name} value={r.name}>{r.display_name}</option>)}
                       </select>
                     ) : (
                       <span className={`admin-role-badge admin-role-${u.role}`}>
-                        {u.role.replace(/_/g, ' ')}
+                        {roles.find((r) => r.name === u.role)?.display_name ?? u.role.replace(/_/g, ' ')}
                       </span>
                     )}
                   </td>

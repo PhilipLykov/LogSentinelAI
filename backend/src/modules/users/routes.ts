@@ -6,9 +6,19 @@ import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { hashPassword, validatePasswordPolicy } from '../../middleware/passwords.js';
 import { writeAuditLog } from '../../middleware/audit.js';
-import type { UserRow, UserRole } from '../../types/index.js';
+import type { UserRow } from '../../types/index.js';
 
-const VALID_ROLES: UserRole[] = ['administrator', 'auditor', 'monitoring_agent'];
+/** Fetch all valid role names from the database. */
+async function getValidRoles(): Promise<string[]> {
+  const db = getDb();
+  try {
+    const rows: Array<{ name: string }> = await db('roles').select('name');
+    return rows.map((r) => r.name);
+  } catch {
+    // Fallback if migration hasn't run yet
+    return ['administrator', 'auditor', 'monitoring_agent'];
+  }
+}
 
 /** Fields safe to return to the client (never expose password_hash). */
 function sanitizeUser(u: UserRow) {
@@ -60,7 +70,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       password: string;
       display_name?: string;
       email?: string;
-      role?: UserRole;
+      role?: string;
       must_change_password?: boolean;
     };
   }>(
@@ -85,7 +95,8 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // Validate role
-      const userRole: UserRole = role && VALID_ROLES.includes(role) ? role : 'monitoring_agent';
+      const validRoles = await getValidRoles();
+      const userRole = role && validRoles.includes(role) ? role : 'monitoring_agent';
 
       // Validate password policy
       const policy = validatePasswordPolicy(password);
@@ -131,7 +142,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     Body: {
       display_name?: string;
       email?: string;
-      role?: UserRole;
+      role?: string;
     };
   }>(
     '/api/v1/users/:id',
@@ -146,8 +157,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       if (display_name !== undefined) updates.display_name = display_name?.trim() || null;
       if (email !== undefined) updates.email = email?.trim() || null;
       if (role !== undefined) {
-        if (!VALID_ROLES.includes(role)) {
-          return reply.code(400).send({ error: `Invalid role. Valid roles: ${VALID_ROLES.join(', ')}` });
+        const validRoles = await getValidRoles();
+        if (!validRoles.includes(role)) {
+          return reply.code(400).send({ error: `Invalid role. Valid roles: ${validRoles.join(', ')}` });
         }
         // Prevent removing last admin
         if (user.role === 'administrator' && role !== 'administrator') {

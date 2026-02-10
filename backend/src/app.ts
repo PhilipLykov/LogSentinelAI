@@ -16,6 +16,7 @@ import { registerAuthRoutes } from './modules/auth/routes.js';
 import { registerUserRoutes } from './modules/users/routes.js';
 import { registerApiKeyRoutes } from './modules/auth/apiKeyRoutes.js';
 import { registerAuditRoutes } from './modules/auth/auditRoutes.js';
+import { registerRoleRoutes } from './modules/roles/routes.js';
 import { localTimestamp } from './config/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -65,6 +66,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerUserRoutes(app);          // user CRUD (admin only)
   await registerApiKeyRoutes(app);        // API key management (admin only)
   await registerAuditRoutes(app);         // audit log (read-only, admin + auditor)
+  await registerRoleRoutes(app);          // role CRUD + permission assignment
   await registerIngestRoutes(app);
   await registerSystemRoutes(app);
   await registerSourceRoutes(app);

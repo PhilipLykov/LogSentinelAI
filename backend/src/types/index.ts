@@ -126,7 +126,7 @@ export interface ApiKeyRow {
 
 // ── User ──────────────────────────────────────────────────────
 
-export type UserRole = 'administrator' | 'auditor' | 'monitoring_agent';
+export type UserRole = string; // Dynamic — any role name from the DB
 
 export interface UserRow {
   id: string;
@@ -134,7 +134,7 @@ export interface UserRow {
   password_hash: string;
   display_name?: string;
   email?: string;
-  role: UserRole;
+  role: string;
   is_active: boolean;
   must_change_password: boolean;
   last_login_at?: string;
