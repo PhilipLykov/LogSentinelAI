@@ -254,7 +254,7 @@ function formatTelegramMessage(payload: AlertPayload): string {
 
     lines.push('');
     lines.push(`\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500`);
-    lines.push(`\u23F0 ${esc(localTimestamp())}  \\|  _SyslogCollectorAI_`);
+    lines.push(`\u23F0 ${esc(localTimestamp())}  \\|  _LogSentinel AI_`);
   }
 
   return lines.join('\n');

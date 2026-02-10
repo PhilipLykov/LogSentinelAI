@@ -1,5 +1,5 @@
 {
-  "name": "syslog-collector-ai-backend",
+  "name": "logsentinel-ai-backend",
   "version": "0.7.2",
   "description": "AI Log Audit and Analysis Solution - Backend",
   "private": true,

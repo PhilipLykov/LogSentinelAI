@@ -120,7 +120,7 @@ export function LoginForm({ onLogin }: LoginFormProps) {
   return (
     <div className="login-container">
       <form className="login-card" onSubmit={handleSubmit}>
-        <h2>SyslogCollectorAI</h2>
+        <h2>LogSentinel AI</h2>
         <p className="login-subtitle">
           Sign in with your username and password.
         </p>

@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide walks you through installing SyslogCollectorAI from start to finish. Choose the deployment method that fits your environment.
+This guide walks you through installing LogSentinel AI from start to finish. Choose the deployment method that fits your environment.
 
 ---
 
@@ -37,8 +37,8 @@ Get up and running in under 5 minutes.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
-cd SyslogCollectorAI/docker
+git clone https://github.com/PhilipLykov/LogSentinelAI.git
+cd LogSentinelAI/docker
 
 # 2. Create your configuration
 cp .env.example .env
@@ -143,7 +143,7 @@ cp .env.example .env
 |----------|----------|---------|-------------|
 | `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (use `postgres` for bundled DB) |
 | `DB_PASSWORD` | **Yes** | — | Database password (pick any strong password) |
-| `DB_NAME` | No | `syslog_collector_ai` | Database name |
+| `DB_NAME` | No | `logsentinel_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
 | `VITE_API_URL` | No | `http://localhost:3000` | Backend URL as seen by the browser |
@@ -186,7 +186,7 @@ By default (without `--profile db`), the bundled PostgreSQL does **not** start. 
 ```bash
 DB_HOST=192.168.1.100
 DB_PORT=5432
-DB_NAME=syslog_collector_ai
+DB_NAME=logsentinel_ai
 DB_USER=syslog_ai
 DB_PASSWORD=your_password
 ```
@@ -200,10 +200,10 @@ docker compose up -d --build
 Ensure the external database exists and the user has `CREATE` permission on the `public` schema:
 
 ```sql
-CREATE DATABASE syslog_collector_ai;
+CREATE DATABASE logsentinel_ai;
 CREATE USER syslog_ai WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE syslog_collector_ai TO syslog_ai;
-\c syslog_collector_ai
+GRANT ALL PRIVILEGES ON DATABASE logsentinel_ai TO syslog_ai;
+\c logsentinel_ai
 GRANT CREATE ON SCHEMA public TO syslog_ai;
 ```
 
@@ -222,8 +222,8 @@ Use this method if you prefer to run Node.js directly on your server.
 ### Step 1: Clone and install dependencies
 
 ```bash
-git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
-cd SyslogCollectorAI
+git clone https://github.com/PhilipLykov/LogSentinelAI.git
+cd LogSentinelAI
 
 cd backend && npm install
 cd ../dashboard && npm install
@@ -233,10 +233,10 @@ cd ..
 ### Step 2: Create the PostgreSQL database
 
 ```sql
-CREATE DATABASE syslog_collector_ai;
+CREATE DATABASE logsentinel_ai;
 CREATE USER syslog_ai WITH PASSWORD 'your_strong_password_here';
-GRANT ALL PRIVILEGES ON DATABASE syslog_collector_ai TO syslog_ai;
-\c syslog_collector_ai
+GRANT ALL PRIVILEGES ON DATABASE logsentinel_ai TO syslog_ai;
+\c logsentinel_ai
 GRANT CREATE ON SCHEMA public TO syslog_ai;
 ```
 
@@ -274,7 +274,7 @@ Serve the `dashboard/dist/` folder with any web server. Example with nginx:
 ```nginx
 server {
     listen 8070;
-    root /path/to/SyslogCollectorAI/dashboard/dist;
+    root /path/to/LogSentinelAI/dashboard/dist;
     index index.html;
 
     location / {
@@ -391,7 +391,7 @@ Create `/opt/syslog-forwarder/syslog-forwarder.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Forward JSON syslog lines to SyslogCollectorAI ingest API."""
+"""Forward JSON syslog lines to LogSentinel AI ingest API."""
 
 import json, time, os, sys, urllib.request, urllib.error
 from datetime import datetime
@@ -467,7 +467,7 @@ Create `/etc/systemd/system/syslog-forwarder.service`:
 
 ```ini
 [Unit]
-Description=Syslog Forwarder to SyslogCollectorAI
+Description=Syslog Forwarder to LogSentinel AI
 After=network.target rsyslog.service
 
 [Service]
@@ -631,7 +631,7 @@ Go to **Settings > Database > Backup Configuration**:
 ### Docker
 
 ```bash
-cd SyslogCollectorAI
+cd LogSentinelAI
 git pull
 cd docker
 docker compose up -d --build
@@ -642,7 +642,7 @@ Database migrations run automatically — no manual steps needed.
 ### Standalone
 
 ```bash
-cd SyslogCollectorAI
+cd LogSentinelAI
 git pull
 
 cd backend
@@ -683,11 +683,11 @@ If you forgot the admin password, reset by deleting users from the database:
 
 ```bash
 # If using bundled PostgreSQL (--profile db):
-docker compose exec postgres psql -U syslog_ai -d syslog_collector_ai \
+docker compose exec postgres psql -U syslog_ai -d logsentinel_ai \
   -c "DELETE FROM sessions; DELETE FROM users;"
 
 # If using external PostgreSQL:
-psql -h your-pg-host -U syslog_ai -d syslog_collector_ai \
+psql -h your-pg-host -U syslog_ai -d logsentinel_ai \
   -c "DELETE FROM sessions; DELETE FROM users;"
 
 # Then restart backend and check logs for new credentials:
@@ -727,7 +727,7 @@ docker compose exec backend sh -c "ls -la /app/data/backups/"
 |----------|----------|---------|-------------|
 | `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (set to `postgres` for bundled DB) |
 | `DB_PASSWORD` | **Yes** | — | PostgreSQL password |
-| `DB_NAME` | No | `syslog_collector_ai` | Database name |
+| `DB_NAME` | No | `logsentinel_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
 | `OPENAI_API_KEY` | No | — | LLM API key fallback (prefer Settings > AI Model in UI) |

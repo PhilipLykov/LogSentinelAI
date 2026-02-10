@@ -1,4 +1,4 @@
-# SyslogCollectorAI v0.7.2-beta — Security Hardening & Consistency
+# LogSentinel AI v0.7.2-beta — Security Hardening & Consistency
 
 **Comprehensive security hardening, audit coverage, CSS/UI consistency, and Docker reliability improvements.**
 
@@ -57,8 +57,8 @@ Upgrade from v0.7.0 or v0.7.1 is strongly recommended.
 Everything runs inside Docker — no external database needed.
 
 ```bash
-git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
-cd SyslogCollectorAI/docker
+git clone https://github.com/PhilipLykov/LogSentinelAI.git
+cd LogSentinelAI/docker
 cp .env.example .env
 # Edit .env: set DB_PASSWORD (pick any strong password)
 # Set DB_HOST=postgres
@@ -73,8 +73,8 @@ docker compose logs backend | grep -A 5 "BOOTSTRAP"
 Backend and dashboard run in Docker; you point them at your existing PostgreSQL server.
 
 ```bash
-git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
-cd SyslogCollectorAI/docker
+git clone https://github.com/PhilipLykov/LogSentinelAI.git
+cd LogSentinelAI/docker
 cp .env.example .env
 # Edit .env: set DB_HOST=<your-pg-server> and DB_PASSWORD
 
@@ -85,12 +85,12 @@ docker compose logs backend | grep -A 5 "BOOTSTRAP"
 
 > AI model and API key are configured after login via **Settings > AI Model** in the web UI.
 
-See [INSTALL.md](https://github.com/PhilipLykov/SyslogCollectorAI/blob/master/INSTALL.md) for the complete deployment guide.
+See [INSTALL.md](https://github.com/PhilipLykov/LogSentinelAI/blob/master/INSTALL.md) for the complete deployment guide.
 
 ## Upgrading from v0.7.0 or v0.7.1
 
 ```bash
-cd SyslogCollectorAI
+cd LogSentinelAI
 git pull
 cd docker
 docker compose up -d --build
@@ -99,4 +99,4 @@ docker compose up -d --build
 
 ---
 
-**Full documentation**: [README.md](https://github.com/PhilipLykov/SyslogCollectorAI/blob/master/README.md) | [INSTALL.md](https://github.com/PhilipLykov/SyslogCollectorAI/blob/master/INSTALL.md)
+**Full documentation**: [README.md](https://github.com/PhilipLykov/LogSentinelAI/blob/master/README.md) | [INSTALL.md](https://github.com/PhilipLykov/LogSentinelAI/blob/master/INSTALL.md)

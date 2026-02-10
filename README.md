@@ -1,12 +1,12 @@
-# SyslogCollectorAI
+# LogSentinel AI
 
-**Intelligent Log Monitoring Platform with AI-Powered Analysis**
+**AI-Powered Log Intelligence and SIEM Platform**
 
-SyslogCollectorAI transforms raw syslog streams into actionable security and operational intelligence. It continuously collects, normalizes, and stores log events from any source, then applies multi-dimensional AI analysis to surface threats, predict failures, and detect anomalies — all through an intuitive real-time dashboard.
+LogSentinel AI transforms raw log streams into actionable security and operational intelligence. It continuously collects, normalizes, and stores log events from any source, then applies multi-dimensional AI analysis to surface threats, predict failures, and detect anomalies — all through an intuitive real-time dashboard.
 
 ---
 
-## Why SyslogCollectorAI?
+## Why LogSentinel AI?
 
 ### AI-Powered Analysis
 
@@ -107,8 +107,8 @@ You only need Docker. AI model and API key are configured via the web UI after f
 Everything runs inside Docker — no external database needed.
 
 ```bash
-git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
-cd SyslogCollectorAI/docker
+git clone https://github.com/PhilipLykov/LogSentinelAI.git
+cd LogSentinelAI/docker
 cp .env.example .env
 # Edit .env: set DB_PASSWORD (pick any strong password) and DB_HOST=postgres
 docker compose --profile db up -d --build
@@ -119,8 +119,8 @@ docker compose --profile db up -d --build
 Use your existing PostgreSQL server. Only the backend and dashboard run in Docker.
 
 ```bash
-git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
-cd SyslogCollectorAI/docker
+git clone https://github.com/PhilipLykov/LogSentinelAI.git
+cd LogSentinelAI/docker
 cp .env.example .env
 # Edit .env: set DB_HOST=<your-pg-server-ip> and DB_PASSWORD
 docker compose up -d --build

@@ -23,7 +23,7 @@ export const config = {
   db: {
     host: process.env.DB_HOST || 'localhost',
     port: envInt(process.env.DB_PORT, 5432),
-    database: process.env.DB_NAME || 'syslog_collector_ai',
+    database: process.env.DB_NAME || 'logsentinel_ai',
     user: process.env.DB_USER || 'syslog_ai',
     password: process.env.DB_PASSWORD ?? '',
   },
