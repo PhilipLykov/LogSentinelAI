@@ -1,43 +1,32 @@
-# SyslogCollectorAI v0.7.0-beta — First Public Release
+# SyslogCollectorAI v0.7.1-beta — Bug Fixes & Hardening
 
-**Intelligent Log Monitoring Platform with AI-Powered Analysis**
+**Patch release with important data integrity fixes, UI improvements, and security hardening.**
 
-SyslogCollectorAI transforms raw syslog streams into actionable security and operational intelligence. It collects, normalizes, and stores log events, then applies multi-dimensional AI analysis to surface threats, predict failures, and detect anomalies — all through an intuitive real-time dashboard.
+Upgrade from v0.7.0-beta is strongly recommended.
 
 ---
 
-## Highlights
+## What's New in v0.7.1
 
-### AI-Powered Analysis
-- **6-Criteria Event Scoring** — Every event evaluated by LLM across IT Security, Performance, Failure Prediction, Anomaly Detection, Compliance, and Operational Risk
-- **Meta-Analysis with Findings** — Sliding-window pipeline with deduplication (TF-IDF + Jaccard), severity decay, and auto-resolution
-- **Content-Based Severity Enrichment** — Automatically upgrades syslog severity based on message content patterns
-- **RAG "Ask AI"** — Natural language queries across your entire event history with persistent chat
-- **Token Optimization** — Score caching, deduplication, severity filtering — up to 80% LLM cost reduction
-- **Per-Criterion Prompts** — Each scoring criterion has an independently tunable system prompt
+### Bug Fixes — Backend
 
-### Security & Privacy
-- **Role-Based Access Control (RBAC)** — Administrator, Auditor, Monitoring Agent roles with 20 granular permissions
-- **User Management** — bcrypt password hashing, account lockout, mandatory password complexity, forced change on first login
-- **Session & API Key Security** — SHA-256 hashed tokens, IP allowlists, expiration, scope-based permissions
-- **Immutable Audit Log** — PostgreSQL trigger prevents modification/deletion; CSV/JSON export
-- **Privacy Controls** — PII masking (11 categories + custom regex), field stripping, bulk deletion with confirmation
-- **OWASP Top 10 Compliance** — Parameterized queries, Helmet headers, rate limiting, non-root Docker
+- **Transactional Role Operations** — Role creation and permission updates are now wrapped in database transactions. Previously, a failure during permission insertion could leave a role with zero permissions.
+- **Invalid Role Rejection** — Creating a user with a non-existent role now returns HTTP 400 instead of silently defaulting to `monitoring_agent`. Consistent with the update endpoint behavior.
+- **Unknown Permission Rejection** — Assigning an invalid permission name to a role now returns HTTP 400 instead of silently dropping it.
+- **Administrator Protection** — Cannot strip all permissions from the `administrator` system role via the API.
+- **Cache TTL Fix** — The synchronous permission cache lookup now respects the 30-second TTL, preventing stale permissions from being served indefinitely.
+- **Timestamp Consistency** — Migration 020 (roles table) now uses timezone-aware timestamps (`timestamptz`) matching all other tables.
+- **Error Logging** — API key `last_used_at` update failures are now logged instead of silently swallowed.
+- **Duplicate Type Cleanup** — `UserRole` type is now defined in a single canonical location.
 
-### UX & UI
-- **Real-Time Dashboard** — Live SSE-based score updates across all systems and criteria
-- **Event Explorer** — Full-text search, filtering, sorting, pagination, keyword highlighting, cross-system tracing
-- **AI Findings Panel** — Tabbed (Open/Acknowledged/Resolved) with one-click actions and bulk operations
-- **Fully GUI-Configurable** — All settings adjustable via web UI: AI model, prompts, notifications, DB maintenance, privacy, users, API keys
+### Bug Fixes — Frontend
 
-### Scalability & Enterprise
-- **Flexible Docker Compose** — Two deployment modes: all-in-one (with bundled PostgreSQL) or bring-your-own-database
-- **Time-Based Table Partitioning** — Monthly auto-partitioned events table for fast queries and instant cleanup
-- **Per-System Data Retention** — Different retention policies per system
-- **Automated Database Backup** — Scheduled pg_dump with configurable format, retention, and UI download
-- **5 Notification Channels** — Webhook, Pushover, NTfy, Gotify, Telegram with silence windows and recovery alerts
-- **LLM Provider Flexibility** — Works with OpenAI, Azure OpenAI, Ollama, LM Studio, vLLM
-- **Multi-System Monitoring** — Regex-based log source selectors with priority ordering
+- **Audit Log Export Dates** — The export function now correctly converts EU-format dates (`DD-MM-YYYY`) to ISO format before sending to the server. Previously, exports with date filters silently used unrecognized date strings.
+- **Role Editor Dirty State** — Toggling permissions in the "Create Role" modal no longer falsely marks the main edit form as changed.
+- **Role Editor Sync After Save** — The edit form now re-syncs from fresh server data after saving, ensuring any server-side normalization is reflected immediately.
+- **User Management Fallback Roles** — If the roles API is unavailable, the role dropdown now shows built-in defaults instead of appearing empty.
+- **NumericInput NaN Guard** — If a parent component passes `NaN`, the input displays `0` (or `min`) instead of literal "NaN" text.
+- **Enable/Disable Button Styling** — The user Enable/Disable toggle now uses distinct CSS classes for each state.
 
 ---
 
@@ -78,23 +67,15 @@ docker compose logs backend | grep -A 5 "BOOTSTRAP"
 
 See [INSTALL.md](https://github.com/PhilipLykov/SyslogCollectorAI/blob/master/INSTALL.md) for the complete deployment guide.
 
-## Tech Stack
+## Upgrading from v0.7.0-beta
 
-| Component | Technology |
-|-----------|-----------|
-| Backend | Node.js 22, Fastify, TypeScript |
-| Database | PostgreSQL 16 (partitioned), Knex.js |
-| Frontend | React 19, Vite, TypeScript |
-| AI | OpenAI-compatible API |
-| Auth | bcrypt, SHA-256 sessions, RBAC |
-| Deployment | Docker Compose, nginx |
-
-## Known Limitations (Beta)
-
-- No multi-tenancy (single-organization deployment)
-- No SSO/SAML/OIDC integration yet
-- Dashboard is English-only
-- No built-in TLS termination (use a reverse proxy like nginx/Traefik)
+```bash
+cd SyslogCollectorAI
+git pull
+cd docker
+docker compose up -d --build
+# Migrations run automatically on startup
+```
 
 ---
 
