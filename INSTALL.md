@@ -25,12 +25,13 @@ This guide walks you through installing SyslogCollectorAI from start to finish. 
 
 ## 1. Quick Start (Docker)
 
-Get up and running in under 5 minutes. Docker Compose includes everything: PostgreSQL, the backend API, and the dashboard.
+Get up and running in under 5 minutes.
 
 ### Prerequisites
 
 - **Docker** 20.10+ with **Docker Compose** v2
 - An **OpenAI API key** (or any OpenAI-compatible API key)
+- **PostgreSQL 14+** (optional — a bundled PostgreSQL is available)
 
 ### Steps
 
@@ -42,20 +43,32 @@ cd SyslogCollectorAI/docker
 # 2. Create your configuration
 cp .env.example .env
 
-# 3. Edit .env — you only NEED to set two values:
+# 3. Edit .env — set these values:
 #    DB_PASSWORD=<pick-a-strong-database-password>
 #    OPENAI_API_KEY=<your-openai-api-key>
+#    DB_HOST=<your-postgresql-server>   (or "postgres" for bundled)
+```
 
-# 4. Build and start all services
+**Option A** — External PostgreSQL (you manage your own DB server):
+```bash
+# Set DB_HOST=your-pg-server-ip in .env, then:
 docker compose up -d --build
+```
 
-# 5. Check the backend logs for your admin credentials
+**Option B** — Bundled PostgreSQL (all-in-one, no external DB needed):
+```bash
+# Set DB_HOST=postgres in .env, then:
+docker compose --profile db up -d --build
+```
+
+```bash
+# 4. Check the backend logs for your admin credentials
 docker compose logs backend | grep -A 5 "BOOTSTRAP"
 ```
 
-Open **http://localhost:8070** in your browser and log in with the credentials from step 5.
+Open **http://localhost:8070** in your browser and log in with the credentials from step 4.
 
-> **That's it!** PostgreSQL, the backend, and the dashboard are all running. Continue reading for detailed configuration, LAN/remote access, or advanced topics.
+> **That's it!** The backend and dashboard are running. Continue reading for detailed configuration, LAN/remote access, or advanced topics.
 
 ---
 
@@ -102,16 +115,20 @@ docker compose up -d --build dashboard
 
 ### What's Included
 
-The `docker-compose.yml` runs three services:
+The `docker-compose.yml` runs two core services plus an optional bundled database:
 
-| Service | Image | Port | Description |
-|---------|-------|------|-------------|
-| **postgres** | `postgres:16-alpine` | 5432 (localhost only) | PostgreSQL database with health checks |
-| **backend** | Custom (Node.js 22) | 3000 | API server + AI analysis pipeline |
-| **dashboard** | Custom (nginx) | 8070 | React web interface |
+| Service | Image | Port | Profile | Description |
+|---------|-------|------|---------|-------------|
+| **postgres** | `postgres:16-alpine` | 5432 (localhost only) | `db` (opt-in) | Bundled PostgreSQL — only starts with `--profile db` |
+| **backend** | Custom (Node.js 22) | 3000 | *(always)* | API server + AI analysis pipeline |
+| **dashboard** | Custom (nginx) | 8070 | *(always)* | React web interface |
+
+> **If you already have a PostgreSQL server**, just run `docker compose up -d` (no `--profile`). The bundled postgres container will **not** start.
+>
+> **If you need a bundled database**, run `docker compose --profile db up -d`.
 
 Data is stored in Docker named volumes:
-- `pgdata` — PostgreSQL database files (persistent across restarts/rebuilds)
+- `pgdata` — PostgreSQL database files (only used with `--profile db`)
 - `backups` — Database backup files
 
 ### All Configuration Options
@@ -125,10 +142,12 @@ cp .env.example .env
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (use `postgres` for bundled DB) |
 | `DB_PASSWORD` | **Yes** | — | Database password (pick any strong password) |
 | `OPENAI_API_KEY` | **Yes** | — | OpenAI (or compatible) API key |
 | `DB_NAME` | No | `syslog_collector_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
+| `DB_PORT` | No | `5432` | PostgreSQL port |
 | `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model name |
 | `VITE_API_URL` | No | `http://localhost:3000` | Backend URL as seen by the browser |
 | `DASHBOARD_PORT` | No | `8070` | Dashboard listen port |
@@ -165,7 +184,7 @@ docker compose up -d --build
 
 ### Using an External PostgreSQL Database
 
-If you already have a PostgreSQL server and prefer not to use the bundled one, you can override the database connection. In your `.env`:
+By default (without `--profile db`), the bundled PostgreSQL does **not** start. Set your external database connection in `.env`:
 
 ```bash
 DB_HOST=192.168.1.100
@@ -175,17 +194,10 @@ DB_USER=syslog_ai
 DB_PASSWORD=your_password
 ```
 
-Then create a `docker-compose.override.yml` to disable the bundled PostgreSQL:
+Then simply run:
 
-```yaml
-services:
-  postgres:
-    profiles: ["disabled"]
-  backend:
-    depends_on: []
-    environment:
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT:-5432}
+```bash
+docker compose up -d --build
 ```
 
 Ensure the external database exists and the user has `CREATE` permission on the `public` schema:
@@ -673,12 +685,16 @@ VITE_API_URL=http://your-server:3000 npm run build
 If you forgot the admin password, reset by deleting users from the database:
 
 ```bash
-# Docker (with bundled PostgreSQL)
+# If using bundled PostgreSQL (--profile db):
 docker compose exec postgres psql -U syslog_ai -d syslog_collector_ai \
   -c "DELETE FROM sessions; DELETE FROM users;"
-docker compose restart backend
 
-# Then check logs for new credentials:
+# If using external PostgreSQL:
+psql -h your-pg-host -U syslog_ai -d syslog_collector_ai \
+  -c "DELETE FROM sessions; DELETE FROM users;"
+
+# Then restart backend and check logs for new credentials:
+docker compose restart backend
 docker compose logs backend | grep -A 5 "BOOTSTRAP"
 ```
 
@@ -716,7 +732,7 @@ docker compose exec backend sh -c "ls -la /app/data/backups/"
 | `OPENAI_API_KEY` | **Yes** | — | OpenAI (or compatible) API key |
 | `DB_NAME` | No | `syslog_collector_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
-| `DB_HOST` | No | `postgres` (Docker) | PostgreSQL hostname |
+| `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (set to `postgres` for bundled DB) |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
 | `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model name |
 | `PORT` | No | `3000` | Backend listen port |

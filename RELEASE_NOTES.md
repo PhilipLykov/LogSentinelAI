@@ -47,8 +47,15 @@ SyslogCollectorAI transforms raw syslog streams into actionable security and ope
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
 cd SyslogCollectorAI/docker
 cp .env.example .env
-# Edit .env: set DB_PASSWORD and OPENAI_API_KEY
+# Edit .env: set DB_HOST, DB_PASSWORD, and OPENAI_API_KEY
+
+# With your own PostgreSQL:
 docker compose up -d --build
+
+# Or all-in-one (bundled PostgreSQL):
+# Set DB_HOST=postgres in .env, then:
+docker compose --profile db up -d --build
+
 docker compose logs backend | grep -A 5 "BOOTSTRAP"
 # Open http://localhost:8070
 ```

@@ -100,14 +100,25 @@ Dashboard (React)  <-->  Alerting (Webhook, Pushover, NTfy, Gotify, Telegram)
 
 ### Quick Start (Docker — 5 minutes)
 
-Everything is included: PostgreSQL, backend, and dashboard. You only need Docker and an OpenAI API key.
+You only need Docker and an OpenAI API key.
 
 ```bash
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
 cd SyslogCollectorAI/docker
 cp .env.example .env
-# Edit .env — set DB_PASSWORD (any strong password) and OPENAI_API_KEY
+# Edit .env — set DB_PASSWORD, OPENAI_API_KEY, and DB_HOST
+```
+
+**Option A** — You already have PostgreSQL:
+```bash
+# Set DB_HOST=your-pg-server-ip in .env
 docker compose up -d --build
+```
+
+**Option B** — All-in-one (bundled PostgreSQL):
+```bash
+# Set DB_HOST=postgres in .env
+docker compose --profile db up -d --build
 ```
 
 Check the backend logs for your admin credentials and open the dashboard:
