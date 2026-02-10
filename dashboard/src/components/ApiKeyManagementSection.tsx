@@ -7,6 +7,7 @@ import {
   updateApiKey,
   revokeApiKey,
 } from '../api';
+import { EuDateInput, euToIso } from './EuDateInput';
 
 const SCOPES = [
   { value: 'admin', label: 'Admin (full access)' },
@@ -63,7 +64,7 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
         name: newName.trim(),
         scope: newScope,
         description: newDescription.trim() || undefined,
-        expires_at: newExpires || undefined,
+        expires_at: euToIso(newExpires) || undefined,
       });
       setCreatedKey(result);
       setShowCreate(false);
@@ -195,7 +196,7 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
               </div>
               <div className="form-group">
                 <label>Expires At</label>
-                <input type="datetime-local" value={newExpires} onChange={(e) => setNewExpires(e.target.value)} />
+                <EuDateInput value={newExpires} onChange={setNewExpires} placeholder="DD-MM-YYYY HH:MM" />
                 <span className="field-hint">Leave empty for no expiration.</span>
               </div>
             </div>

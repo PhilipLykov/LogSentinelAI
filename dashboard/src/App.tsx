@@ -204,7 +204,7 @@ export default function App() {
         <div className="header-actions">
           {view === 'dashboard' && lastRefreshed && (
             <span className="last-refreshed" aria-live="polite">
-              {refreshing ? 'Refreshing…' : `Updated ${lastRefreshed.toLocaleTimeString()}`}
+              {refreshing ? 'Refreshing…' : `Updated ${String(lastRefreshed.getHours()).padStart(2,'0')}:${String(lastRefreshed.getMinutes()).padStart(2,'0')}:${String(lastRefreshed.getSeconds()).padStart(2,'0')}`}
             </span>
           )}
           {view === 'dashboard' && (
