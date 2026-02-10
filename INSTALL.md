@@ -44,9 +44,8 @@ cd SyslogCollectorAI/docker
 cp .env.example .env
 
 # 3. Edit .env — set these values:
-#    DB_PASSWORD=<pick-a-strong-database-password>
-#    OPENAI_API_KEY=<your-openai-api-key>
 #    DB_HOST=<your-postgresql-server>   (or "postgres" for bundled)
+#    DB_PASSWORD=<pick-a-strong-database-password>
 ```
 
 **Option A** — External PostgreSQL (you manage your own DB server):
@@ -144,11 +143,9 @@ cp .env.example .env
 |----------|----------|---------|-------------|
 | `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (use `postgres` for bundled DB) |
 | `DB_PASSWORD` | **Yes** | — | Database password (pick any strong password) |
-| `OPENAI_API_KEY` | **Yes** | — | OpenAI (or compatible) API key |
 | `DB_NAME` | No | `syslog_collector_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model name |
 | `VITE_API_URL` | No | `http://localhost:3000` | Backend URL as seen by the browser |
 | `DASHBOARD_PORT` | No | `8070` | Dashboard listen port |
 | `CORS_ORIGIN` | No | `http://localhost:8070` | Allowed CORS origin |
@@ -728,13 +725,12 @@ docker compose exec backend sh -c "ls -la /app/data/backups/"
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (set to `postgres` for bundled DB) |
 | `DB_PASSWORD` | **Yes** | — | PostgreSQL password |
-| `OPENAI_API_KEY` | **Yes** | — | OpenAI (or compatible) API key |
 | `DB_NAME` | No | `syslog_collector_ai` | Database name |
 | `DB_USER` | No | `syslog_ai` | Database username |
-| `DB_HOST` | **Yes** | `localhost` | PostgreSQL hostname (set to `postgres` for bundled DB) |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model name |
+| `OPENAI_API_KEY` | No | — | LLM API key fallback (prefer Settings > AI Model in UI) |
 | `PORT` | No | `3000` | Backend listen port |
 | `HOST` | No | `0.0.0.0` | Backend bind address |
 | `DASHBOARD_PORT` | No | `8070` | Dashboard listen port |

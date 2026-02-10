@@ -106,7 +106,7 @@ You only need Docker and an OpenAI API key.
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
 cd SyslogCollectorAI/docker
 cp .env.example .env
-# Edit .env — set DB_PASSWORD, OPENAI_API_KEY, and DB_HOST
+# Edit .env — set DB_HOST and DB_PASSWORD
 ```
 
 **Option A** — You already have PostgreSQL:
