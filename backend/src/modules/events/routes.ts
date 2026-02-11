@@ -5,34 +5,14 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { writeAuditLog } from '../../middleware/audit.js';
-
-/** Escape LIKE/ILIKE wildcards in user input to prevent pattern injection. */
-function escapeLike(value: string): string {
-  return value.replace(/[%_\\]/g, '\\$&');
-}
-
-/** Allowed sort columns — prevents SQL injection via sort_by param. */
-const ALLOWED_SORT_COLUMNS = new Set([
-  'timestamp',
-  'severity',
-  'host',
-  'source_ip',
-  'program',
-  'service',
-]);
-
-/** Max rows per search page. */
-const MAX_LIMIT = 200;
-const DEFAULT_LIMIT = 100;
-
-/** Max rows for facets (distinct values). */
-const FACET_LIMIT = 200;
+import { getDefaultEventSource } from '../../services/eventSourceFactory.js';
 
 /**
  * Event search, facet, and trace endpoints.
  */
 export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
+  const eventSource = getDefaultEventSource(db);
 
   // ── Search events (global, cross-system) ──────────────────
   app.get<{
@@ -57,159 +37,28 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
     '/api/v1/events/search',
     { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
-      const {
-        q,
-        q_mode,
-        system_id,
-        severity,
-        host,
-        source_ip,
-        program,
-        service,
-        trace_id,
-        from,
-        to,
-        sort_by,
-        sort_dir,
-      } = request.query;
-
-      const rawPage = Number(request.query.page ?? 1);
-      const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
-      const rawLimit = Number(request.query.limit ?? DEFAULT_LIMIT);
-      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), MAX_LIMIT) : DEFAULT_LIMIT;
-      const offset = (page - 1) * limit;
-
-      // Validate sort
-      const sortColumn = ALLOWED_SORT_COLUMNS.has(sort_by ?? '') ? sort_by! : 'timestamp';
-      const sortDirection = sort_dir === 'asc' ? 'asc' : 'desc';
-
-      // Build base query
-      const baseQuery = db('events')
-        .join('monitored_systems', 'events.system_id', 'monitored_systems.id');
-
-      // Apply filters
-      if (system_id) {
-        baseQuery.where('events.system_id', system_id);
-      }
-      if (severity) {
-        const severities = severity
-          .split(',')
-          .map((s) => s.trim().toLowerCase())
-          .filter((s) => s.length > 0);
-        if (severities.length > 0) {
-          baseQuery.whereRaw(
-            `LOWER(events.severity) IN (${severities.map(() => '?').join(', ')})`,
-            severities,
-          );
-        }
-      }
-      if (host) {
-        baseQuery.where('events.host', host);
-      }
-      if (source_ip) {
-        baseQuery.where('events.source_ip', source_ip);
-      }
-      if (program) {
-        baseQuery.where('events.program', program);
-      }
-      if (service) {
-        baseQuery.where('events.service', service);
-      }
-      if (trace_id) {
-        baseQuery.where('events.trace_id', trace_id);
-      }
-      if (from) {
-        if (!isNaN(Date.parse(from))) {
-          baseQuery.where('events.timestamp', '>=', from);
-        }
-      }
-      if (to) {
-        if (!isNaN(Date.parse(to))) {
-          baseQuery.where('events.timestamp', '<=', to);
-        }
-      }
-
-      // Full-text search or ILIKE substring
-      if (q && q.trim().length > 0) {
-        const trimmed = q.trim();
-        if (q_mode === 'contains') {
-          // ILIKE substring search (slower, but exact match)
-          baseQuery.where('events.message', 'ILIKE', `%${escapeLike(trimmed)}%`);
-        } else {
-          // PostgreSQL full-text search using websearch_to_tsquery
-          // websearch_to_tsquery supports natural language: "error OR warning", "connection refused", etc.
-          baseQuery.whereRaw(
-            `to_tsvector('english', events.message) @@ websearch_to_tsquery('english', ?)`,
-            [trimmed],
-          );
-        }
-      }
-
       try {
-        // Count total (clone before applying sort/limit/offset)
-        const countResult = await baseQuery
-          .clone()
-          .clearSelect()
-          .clearOrder()
-          .count('events.id as total')
-          .first();
-        const total = Number(countResult?.total ?? 0);
-
-        // Fetch page
-        const events = await baseQuery
-          .clone()
-          .select(
-            'events.id',
-            'events.system_id',
-            'monitored_systems.name as system_name',
-            'events.log_source_id',
-            'events.timestamp',
-            'events.received_at',
-            'events.message',
-            'events.severity',
-            'events.host',
-            'events.source_ip',
-            'events.service',
-            'events.program',
-            'events.facility',
-            'events.trace_id',
-            'events.span_id',
-            'events.external_id',
-            'events.raw',
-            'events.acknowledged_at',
-          )
-          .orderBy(`events.${sortColumn}`, sortDirection)
-          // Secondary sort for deterministic ordering when primary sort has ties
-          .orderBy('events.id', 'asc')
-          .limit(limit)
-          .offset(offset);
-
-        // Parse raw JSON safely
-        const result = events.map((e: any) => {
-          let raw = e.raw;
-          if (raw && typeof raw === 'string') {
-            try {
-              raw = JSON.parse(raw);
-            } catch {
-              /* keep as string */
-            }
-          }
-          return { ...e, raw };
+        const result = await eventSource.searchEvents({
+          q: request.query.q,
+          q_mode: request.query.q_mode as 'fulltext' | 'contains' | undefined,
+          system_id: request.query.system_id,
+          severity: request.query.severity,
+          host: request.query.host,
+          source_ip: request.query.source_ip,
+          program: request.query.program,
+          service: request.query.service,
+          trace_id: request.query.trace_id,
+          from: request.query.from,
+          to: request.query.to,
+          sort_by: request.query.sort_by,
+          sort_dir: request.query.sort_dir as 'asc' | 'desc' | undefined,
+          page: Number(request.query.page ?? 1),
+          limit: Number(request.query.limit ?? 100),
         });
-
-        return reply.send({
-          events: result,
-          total,
-          page,
-          limit,
-          has_more: offset + limit < total,
-        });
+        return reply.send(result);
       } catch (err: any) {
-        // websearch_to_tsquery can throw on severely malformed input
         app.log.error(`[${localTimestamp()}] Event search error: ${err.message}`);
-        return reply.code(400).send({
-          error: 'Search failed. Check your query syntax.',
-        });
+        return reply.code(400).send({ error: 'Search failed. Check your query syntax.' });
       }
     },
   );
@@ -224,45 +73,14 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const { system_id } = request.query;
       const rawDays = Number(request.query.days ?? 7);
       const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 90) : 7;
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-      // Build base condition
-      const baseWhere = (col: string) => {
-        const q = db('events')
-          .where('events.timestamp', '>=', since)
-          .whereNotNull(col)
-          .where(col, '!=', '');
-        if (system_id) q.where('events.system_id', system_id);
-        return q;
-      };
+      const facets = await eventSource.getFacets(system_id, days);
 
-      const [severities, hosts, sourceIps, programs, systems] = await Promise.all([
-        baseWhere('events.severity')
-          .distinct('events.severity as value')
-          .orderBy('value')
-          .limit(FACET_LIMIT),
-        baseWhere('events.host')
-          .distinct('events.host as value')
-          .orderBy('value')
-          .limit(FACET_LIMIT),
-        baseWhere('events.source_ip')
-          .distinct('events.source_ip as value')
-          .orderBy('value')
-          .limit(FACET_LIMIT),
-        baseWhere('events.program')
-          .distinct('events.program as value')
-          .orderBy('value')
-          .limit(FACET_LIMIT),
-        db('monitored_systems')
-          .select('id', 'name')
-          .orderBy('name'),
-      ]);
+      // Systems list is always from PG (not event-source dependent)
+      const systems = await db('monitored_systems').select('id', 'name').orderBy('name');
 
       return reply.send({
-        severities: severities.map((r: any) => r.value),
-        hosts: hosts.map((r: any) => r.value),
-        source_ips: sourceIps.map((r: any) => r.value),
-        programs: programs.map((r: any) => r.value),
+        ...facets,
         systems: systems.map((r: any) => ({ id: r.id, name: r.name })),
       });
     },
@@ -290,12 +108,11 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const trimmedValue = value.trim();
       const rawWindowHours = Number(request.query.window_hours ?? 24);
       const windowHours = Number.isFinite(rawWindowHours) && rawWindowHours > 0
-        ? Math.min(rawWindowHours, 168)  // max 7 days
+        ? Math.min(rawWindowHours, 168)
         : 24;
       const rawLimit = Number(request.query.limit ?? 500);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 1000) : 500;
 
-      // Calculate time window around anchor
       const anchorDate = anchor_time && !isNaN(Date.parse(anchor_time))
         ? new Date(anchor_time)
         : new Date();
@@ -303,68 +120,18 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const fromTs = new Date(anchorDate.getTime() - windowMs).toISOString();
       const toTs = new Date(anchorDate.getTime() + windowMs).toISOString();
 
-      const query = db('events')
-        .join('monitored_systems', 'events.system_id', 'monitored_systems.id')
-        .where('events.timestamp', '>=', fromTs)
-        .where('events.timestamp', '<=', toTs);
-
-      const searchField = field || 'all';
-
-      if (searchField === 'trace_id') {
-        query.where('events.trace_id', trimmedValue);
-      } else if (searchField === 'message') {
-        // Use ILIKE for message tracing (exact substring match is more useful for correlation IDs)
-        query.where('events.message', 'ILIKE', `%${escapeLike(trimmedValue)}%`);
-      } else {
-        // 'all': search trace_id OR in message
-        query.where(function () {
-          this.where('events.trace_id', trimmedValue)
-            .orWhere('events.span_id', trimmedValue)
-            .orWhere('events.message', 'ILIKE', `%${escapeLike(trimmedValue)}%`);
-        });
-      }
+      const searchField = (field || 'all') as 'trace_id' | 'message' | 'all';
 
       try {
-        const events = await query
-          .select(
-            'events.id',
-            'events.system_id',
-            'monitored_systems.name as system_name',
-            'events.timestamp',
-            'events.message',
-            'events.severity',
-            'events.host',
-            'events.source_ip',
-            'events.program',
-            'events.service',
-            'events.trace_id',
-            'events.span_id',
-            'events.external_id',
-            'events.raw',
-          )
-          .orderBy('events.timestamp', 'asc')
-          .limit(limit);
-
-        // Parse raw JSON safely
-        const result = events.map((e: any) => {
-          let raw = e.raw;
-          if (raw && typeof raw === 'string') {
-            try {
-              raw = JSON.parse(raw);
-            } catch {
-              /* keep as string */
-            }
-          }
-          return { ...e, raw };
-        });
+        const traceResult = await eventSource.traceEvents(trimmedValue, searchField, fromTs, toTs, limit);
 
         // Group by system for the frontend timeline
         const bySystem: Record<string, { system_id: string; system_name: string; events: any[] }> = {};
-        for (const evt of result) {
+        for (const evt of traceResult.events) {
           if (!bySystem[evt.system_id]) {
             bySystem[evt.system_id] = {
               system_id: evt.system_id,
-              system_name: evt.system_name,
+              system_name: evt.system_name ?? '',
               events: [],
             };
           }
@@ -375,9 +142,9 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           value: trimmedValue,
           field: searchField,
           window: { from: fromTs, to: toTs },
-          total: result.length,
+          total: traceResult.total,
           systems: Object.values(bySystem),
-          events: result,
+          events: traceResult.events,
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Event trace error: ${err.message}`);
@@ -401,7 +168,6 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const body = request.body as any ?? {};
       const { system_id, from, to } = body;
 
-      // Validate dates before parsing
       if (from && isNaN(Date.parse(from))) {
         return reply.code(400).send({ error: '"from" must be a valid ISO date string.' });
       }
@@ -413,47 +179,14 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const fromTs = from ? new Date(from).toISOString() : null;
 
       try {
-        let query = db('events')
-          .whereNull('acknowledged_at')
-          .where('timestamp', '<=', toTs);
+        const totalAcked = await eventSource.acknowledgeEvents({
+          system_id,
+          from: fromTs,
+          to: toTs,
+        });
 
-        if (fromTs) {
-          query = query.where('timestamp', '>=', fromTs);
-        }
-
-        if (system_id) {
-          query = query.where('system_id', system_id);
-        }
-
-        // Count first
-        const countResult = await query.clone().count('id as cnt').first();
-        const count = Number(countResult?.cnt ?? 0);
-
-        if (count === 0) {
+        if (totalAcked === 0) {
           return reply.send({ acknowledged: 0, message: 'No events to acknowledge in the given range.' });
-        }
-
-        // Batch update to avoid locking the entire table for too long
-        const BATCH_SIZE = 5000;
-        let totalAcked = 0;
-        const ackTs = new Date().toISOString();
-
-        while (totalAcked < count) {
-          // Get a batch of IDs to update
-          let batchQuery = db('events')
-            .whereNull('acknowledged_at')
-            .where('timestamp', '<=', toTs);
-          if (fromTs) batchQuery = batchQuery.where('timestamp', '>=', fromTs);
-          if (system_id) batchQuery = batchQuery.where('system_id', system_id);
-
-          const ids = await batchQuery.select('id').limit(BATCH_SIZE);
-          if (ids.length === 0) break;
-
-          await db('events')
-            .whereIn('id', ids.map((r: any) => r.id))
-            .update({ acknowledged_at: ackTs });
-
-          totalAcked += ids.length;
         }
 
         app.log.info(
@@ -504,13 +237,11 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const fromTs = from ? new Date(from).toISOString() : null;
 
       try {
-        let query = db('events')
-          .whereNotNull('acknowledged_at')
-          .where('timestamp', '<=', toTs);
-        if (fromTs) query = query.where('timestamp', '>=', fromTs);
-        if (system_id) query = query.where('system_id', system_id);
-
-        const result = await query.update({ acknowledged_at: null });
+        const result = await eventSource.unacknowledgeEvents({
+          system_id,
+          from: fromTs,
+          to: toTs,
+        });
 
         app.log.info(`[${localTimestamp()}] Bulk event un-acknowledge: ${result} events`);
 

@@ -1,3 +1,55 @@
+# LogSentinel AI v0.8.0-beta — Elasticsearch Integration
+
+**Hybrid event storage: read events directly from existing Elasticsearch clusters without duplicating data. Full UI management for ES connections, per-system event source selection, and ECS field flattening.**
+
+---
+
+## What's New in v0.8.0
+
+### Elasticsearch Integration (Hybrid Architecture)
+
+- **EventSource abstraction layer** — Storage-agnostic interface (`EventSource`) with PostgreSQL (`PgEventSource`) and Elasticsearch (`EsEventSource`) implementations. Each monitored system chooses its event source independently.
+- **ES Connection Management** — Full CRUD for Elasticsearch connections via Settings > Elasticsearch. Supports Basic auth, API Key, and Elastic Cloud ID authentication. Test connections before saving.
+- **Index Browser** — Browse indices, inspect field mappings, and preview sample documents directly from the UI to configure field mapping.
+- **Per-System ES Configuration** — When creating or editing a monitored system, select "Elasticsearch (external)" as event source. Configure index pattern, timestamp/message field mapping, and optional query filters.
+- **Read-Only ES Access** — LogSentinel AI never writes to or deletes from your Elasticsearch cluster. AI analysis results, acknowledgments, and metadata are stored in PostgreSQL.
+- **ECS Field Flattening** — Elastic Common Schema nested fields (e.g., `host.name`, `source.ip`, `log.level`) are automatically flattened during ingest for compatibility with the scoring pipeline.
+- **Database Info Card** — Expandable PostgreSQL server info (version, database size, partitioning status, top tables by size) in Settings > Database.
+- **ES Health Dashboard** — Connection status, last health check, and cluster info visible in the Elasticsearch settings and Database Info panels.
+
+### Pipeline Enhancements
+
+- **System-aware EventSource dispatch** — AI scoring, meta-analysis, windowing, and maintenance jobs now dispatch to the correct EventSource per system (PostgreSQL or Elasticsearch).
+- **ES event scoring** — Events from Elasticsearch are scored the same way as PostgreSQL events. Scores and template assignments are stored in PostgreSQL (`event_scores`, `es_event_metadata`).
+- **ES acknowledgment support** — Acknowledging events for ES-backed systems stores metadata in PostgreSQL without modifying the Elasticsearch index.
+
+### Built-in Log Collector (Fluent Bit)
+
+- **Syslog receiver** — UDP (RFC 3164) and TCP (RFC 5424) on configurable port (default 5140). Accepts logs from routers, switches, firewalls, rsyslog, syslog-ng.
+- **OpenTelemetry receiver** — OTLP/HTTP and OTLP/gRPC on a single port (default 4318). Accepts logs, metrics, and traces from OTel Collectors, SDKs, and agents.
+- **Docker profile** — Deploy with `docker compose --profile collector up -d`. Requires `INGEST_API_KEY` in `.env`.
+- **Health monitoring** — Fluent Bit health and Prometheus metrics on port 2020.
+- **Custom parsers** — Included parsers for RFC 3164, RFC 5424, bare syslog, and JSON.
+
+### Database Migration
+
+- **Migration 021** — Adds `event_source`, `es_config`, `es_connection_id` columns to `monitored_systems`. Creates `elasticsearch_connections` and `es_event_metadata` tables. Widens `event_scores.event_id` to `VARCHAR(255)` for ES document IDs.
+
+---
+
+## Upgrading from v0.7.x
+
+1. Pull the latest code and rebuild Docker images.
+2. Migration 021 runs automatically on startup — no manual SQL needed.
+3. Existing systems default to `event_source = 'postgresql'` — no behavior change.
+4. To connect to Elasticsearch: go to Settings > Elasticsearch > Add Connection.
+5. To enable the log collector: set `INGEST_API_KEY` in `.env`, then run `docker compose --profile collector up -d`.
+5. To enable the log collector: set `INGEST_API_KEY` in `.env` and add `--profile collector`.
+
+---
+
+---
+
 # LogSentinel AI v0.7.2-beta — Security Hardening & Consistency
 
 **Comprehensive security hardening, audit coverage, CSS/UI consistency, and Docker reliability improvements.**

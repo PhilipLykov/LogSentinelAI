@@ -55,6 +55,9 @@ export interface MonitoredSystem {
   name: string;
   description: string;
   retention_days: number | null; // NULL = use global default
+  event_source: 'postgresql' | 'elasticsearch';
+  es_config: Record<string, unknown> | null;
+  es_connection_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -63,12 +66,47 @@ export interface CreateSystemBody {
   name: string;
   description?: string;
   retention_days?: number | null;
+  event_source?: 'postgresql' | 'elasticsearch';
+  es_config?: Record<string, unknown> | null;
+  es_connection_id?: string | null;
 }
 
 export interface UpdateSystemBody {
   name?: string;
   description?: string;
   retention_days?: number | null;
+  event_source?: 'postgresql' | 'elasticsearch';
+  es_config?: Record<string, unknown> | null;
+  es_connection_id?: string | null;
+}
+
+/** Per-system Elasticsearch configuration stored as JSONB in monitored_systems.es_config. */
+export interface EsSystemConfig {
+  index_pattern: string;          // e.g. "filebeat-*", "logs-*"
+  query_filter?: Record<string, unknown>; // Optional ES query DSL filter
+  timestamp_field?: string;       // Default: "@timestamp"
+  message_field?: string;         // Default: "message"
+  field_mapping?: Record<string, string>; // ES field → LogEvent field mapping
+}
+
+/** Row shape for the elasticsearch_connections table. */
+export interface ElasticsearchConnection {
+  id: string;
+  name: string;
+  url: string;
+  auth_type: 'none' | 'basic' | 'api_key' | 'cloud_id';
+  credentials_encrypted?: string | null;
+  tls_reject_unauthorized: boolean;
+  ca_cert?: string | null;
+  request_timeout_ms: number;
+  max_retries: number;
+  pool_max_connections: number;
+  is_default: boolean;
+  status: 'unknown' | 'connected' | 'error';
+  last_error?: string | null;
+  last_health_check_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // ── Log source ───────────────────────────────────────────────

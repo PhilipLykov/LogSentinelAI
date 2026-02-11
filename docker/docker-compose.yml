@@ -58,6 +58,43 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # ── Log Collector (Fluent Bit – optional, use profile "collector") ──
+  # Enable with: docker compose --profile collector up -d
+  #
+  # Receives logs via:
+  #   - Syslog UDP/TCP  (default port 5140)
+  #   - OpenTelemetry OTLP/HTTP + OTLP/gRPC (default port 4318)
+  #
+  # Forwards everything to the LogSentinel AI ingest API.
+  log-collector:
+    image: fluent/fluent-bit:latest
+    profiles:
+      - collector
+    ports:
+      - "${SYSLOG_UDP_PORT:-5140}:${SYSLOG_UDP_PORT:-5140}/udp"
+      - "${SYSLOG_TCP_PORT:-5140}:${SYSLOG_TCP_PORT:-5140}/tcp"
+      - "${OTEL_PORT:-4318}:${OTEL_PORT:-4318}"
+      - "2020:2020"   # Fluent Bit health/metrics endpoint
+    environment:
+      # Syslog listener ports
+      - SYSLOG_UDP_PORT=${SYSLOG_UDP_PORT:-5140}
+      - SYSLOG_TCP_PORT=${SYSLOG_TCP_PORT:-5140}
+      # OpenTelemetry OTLP port (gRPC + HTTP on same port)
+      - OTEL_PORT=${OTEL_PORT:-4318}
+      # LogSentinel AI backend connection
+      - INGEST_HOST=backend
+      - INGEST_PORT=3000
+      - INGEST_API_KEY=${INGEST_API_KEY:?Set INGEST_API_KEY in .env}
+      # Fluent Bit log level (error, warn, info, debug, trace)
+      - LOG_LEVEL=${COLLECTOR_LOG_LEVEL:-info}
+    volumes:
+      - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   pgdata:
     driver: local

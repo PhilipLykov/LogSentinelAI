@@ -8,6 +8,7 @@ import { CRITERIA } from '../../types/index.js';
 import { resolveCustomPrompts, resolveCriterionGuidelines } from '../llm/aiConfig.js';
 import { buildScoringPrompt } from '../llm/adapter.js';
 import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFilter.js';
+import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
 
 // ── Token Optimization config type ──────────────────────────
 export interface TokenOptimizationConfig {
@@ -118,20 +119,27 @@ export async function runPerEventScoringJob(
 
   const batchSize = Math.max(1, Math.min(opt.scoring_batch_size, 100));
 
-  // 1. Fetch unscored, unacknowledged events
-  let query = db('events')
-    .leftJoin('event_scores', 'events.id', 'event_scores.event_id')
-    .whereNull('event_scores.id')
-    .whereNull('events.acknowledged_at')
-    .select('events.id', 'events.system_id', 'events.message', 'events.severity',
-            'events.host', 'events.program', 'events.log_source_id')
-    .limit(limit);
-
+  // 1. Fetch unscored, unacknowledged events — via EventSource abstraction
+  //    Dispatch to each system's event source to support ES-backed systems.
+  let unscoredEvents: any[];
   if (options?.systemId) {
-    query = query.where('events.system_id', options.systemId);
+    // Single system — use its specific event source
+    const system = await db('monitored_systems').where({ id: options.systemId }).first();
+    const es = system ? getEventSource(system, db) : getDefaultEventSource(db);
+    unscoredEvents = await es.getUnscoredEvents(options.systemId, limit);
+  } else {
+    // All systems — collect unscored events from each system's event source
+    const systems = await db('monitored_systems').select('*');
+    unscoredEvents = [];
+    const perSystemLimit = Math.max(10, Math.floor(limit / Math.max(systems.length, 1)));
+    for (const sys of systems) {
+      const es = getEventSource(sys, db);
+      const batch = await es.getUnscoredEvents(sys.id, perSystemLimit);
+      unscoredEvents.push(...batch);
+      if (unscoredEvents.length >= limit) break;
+    }
+    unscoredEvents = unscoredEvents.slice(0, limit);
   }
-
-  const unscoredEvents = await query;
 
   if (unscoredEvents.length === 0) {
     console.log(`[${localTimestamp()}] Per-event scoring: no unscored events found.`);

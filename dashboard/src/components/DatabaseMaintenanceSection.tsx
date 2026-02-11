@@ -6,6 +6,7 @@ import {
   type BackupConfig,
   type BackupFileInfo,
   type BackupRunResult,
+  type DatabaseInfo,
   fetchMaintenanceConfig,
   updateMaintenanceConfig,
   triggerMaintenanceRun,
@@ -17,6 +18,7 @@ import {
   getBackupDownloadUrl,
   getApiKeyForDownload,
   deleteBackup,
+  fetchDatabaseInfo,
 } from '../api';
 
 interface DatabaseMaintenanceSectionProps {
@@ -76,6 +78,10 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
   const [backupRunning, setBackupRunning] = useState(false);
   const [backupResult, setBackupResult] = useState<BackupRunResult | null>(null);
 
+  // PG info card
+  const [dbInfo, setDbInfo] = useState<DatabaseInfo | null>(null);
+  const [showDbInfo, setShowDbInfo] = useState(false);
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
@@ -116,6 +122,14 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
   useEffect(() => {
     load();
   }, [load]);
+
+  // Load DB info when card is expanded
+  useEffect(() => {
+    if (!showDbInfo || dbInfo) return;
+    fetchDatabaseInfo()
+      .then(setDbInfo)
+      .catch(() => { /* ignore errors for optional info card */ });
+  }, [showDbInfo, dbInfo]);
 
   const handleSave = async () => {
     const rd = Number(retentionDays);
@@ -298,6 +312,68 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
           <span className="db-stat-label">Templates</span>
           <span className="db-stat-value">{Number(dbStats.total_templates ?? 0).toLocaleString()}</span>
         </div>
+      </div>
+
+      {/* ── PostgreSQL Info Card ── */}
+      <div className="db-config-section" style={{ marginBottom: '1rem' }}>
+        <h4
+          onClick={() => setShowDbInfo(!showDbInfo)}
+          style={{ cursor: 'pointer', userSelect: 'none' }}
+        >
+          {showDbInfo ? '\u25BC' : '\u25B6'} PostgreSQL Server Info
+        </h4>
+        {showDbInfo && dbInfo?.postgresql && !dbInfo.postgresql.error && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginTop: '0.5rem' }}>
+            <div className="db-stat">
+              <span className="db-stat-label">Version</span>
+              <span className="db-stat-value" style={{ fontSize: '0.85rem' }}>
+                {(dbInfo.postgresql.version ?? '').split(' ').slice(0, 2).join(' ')}
+              </span>
+            </div>
+            <div className="db-stat">
+              <span className="db-stat-label">Database</span>
+              <span className="db-stat-value">{dbInfo.postgresql.database ?? '—'}</span>
+            </div>
+            <div className="db-stat">
+              <span className="db-stat-label">Host</span>
+              <span className="db-stat-value">{dbInfo.postgresql.host ?? '—'}:{dbInfo.postgresql.port ?? '5432'}</span>
+            </div>
+            <div className="db-stat">
+              <span className="db-stat-label">Total Size</span>
+              <span className="db-stat-value">{dbInfo.postgresql.size ?? '—'}</span>
+            </div>
+            <div className="db-stat">
+              <span className="db-stat-label">Partitioned</span>
+              <span className="db-stat-value">{dbInfo.postgresql.partitioned ? 'Yes' : 'No'}</span>
+            </div>
+            {dbInfo.postgresql.top_tables && dbInfo.postgresql.top_tables.length > 0 && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <strong style={{ fontSize: '0.85rem' }}>Top Tables by Size:</strong>
+                <div className="table-wrap" style={{ maxHeight: '200px', overflowY: 'auto', marginTop: '0.25rem' }}>
+                  <table className="data-table data-table-compact">
+                    <thead><tr><th>Table</th><th>Size</th></tr></thead>
+                    <tbody>
+                      {dbInfo.postgresql.top_tables.map((t: { table_name: string; total_size: string }) => (
+                        <tr key={t.table_name}>
+                          <td><code className="text-sm">{t.table_name}</code></td>
+                          <td className="text-right">{t.total_size}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {showDbInfo && dbInfo?.postgresql?.error && (
+          <p className="text-sm" style={{ color: 'var(--danger, #e74c3c)' }}>
+            Failed to load PostgreSQL info: {dbInfo.postgresql.error}
+          </p>
+        )}
+        {showDbInfo && !dbInfo && (
+          <div className="settings-loading"><div className="spinner" /> Loading...</div>
+        )}
       </div>
 
       {/* ── Global Settings ── */}

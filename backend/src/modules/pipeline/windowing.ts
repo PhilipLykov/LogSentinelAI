@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
+import { getEventSource } from '../../services/eventSourceFactory.js';
 
 const DEFAULT_WINDOW_MINUTES = 5;
 
@@ -20,12 +21,12 @@ export async function createWindows(
   const windowMinutes = options?.windowMinutes ?? DEFAULT_WINDOW_MINUTES;
   const windowMs = windowMinutes * 60 * 1000;
   const now = new Date();
-
-  // Get all monitored systems
-  const systems = await db('monitored_systems').select('id');
+  // Get all monitored systems (with full row for EventSource dispatch)
+  const systems = await db('monitored_systems').select('*');
   const created: Array<{ id: string; system_id: string; from_ts: string; to_ts: string }> = [];
 
   for (const system of systems) {
+    const eventSource = getEventSource(system, db);
     // Find the latest window end for this system
     const lastWindow = await db('windows')
       .where({ system_id: system.id })
@@ -45,15 +46,10 @@ export async function createWindows(
       const from_ts = new Date(fromTime).toISOString();
       const to_ts = new Date(fromTime + windowMs).toISOString();
 
-      // Check if there are events in this range
-      const eventCount = await db('events')
-        .where({ system_id: system.id })
-        .where('timestamp', '>=', from_ts)
-        .where('timestamp', '<', to_ts)
-        .count('id as cnt')
-        .first();
+      // Check if there are events in this range — via EventSource abstraction
+      const eventCount = await eventSource.countEventsInTimeRange(system.id, from_ts, to_ts);
 
-      if (Number(eventCount?.cnt ?? 0) > 0) {
+      if (eventCount > 0) {
         const id = uuidv4();
         await db('windows').insert({
           id,

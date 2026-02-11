@@ -8,7 +8,7 @@ import type { IngestEntry, NormalizedEvent } from '../../types/index.js';
  * Returns null if the entry is invalid (missing message).
  */
 export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
-  const message = entry.message ?? (entry as any).short_message ?? (entry as any).msg;
+  const message = entry.message ?? (entry as any).short_message ?? (entry as any).msg ?? (entry as any).body;
   if (!message || typeof message !== 'string' || message.trim().length === 0) {
     return null;
   }
@@ -43,22 +43,80 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     timestamp = new Date().toISOString();
   }
 
-  // Severity: normalize from syslog numeric or string
-  let severity = entry.severity ?? (entry as any).level ?? (entry as any).syslog_severity;
+  // Severity: normalize from syslog numeric or string.
+  //
+  // Resolution order:
+  //   1. Standard string fields: severity, level, syslog_severity, severity_text
+  //   2. Standard numeric fields: severity, level (syslog 0-7)
+  //   3. OTel severity_number (1-24)
+  //   4. Syslog PRI (facility*8 + severity)
+
+  /** Treat null, undefined, and empty/whitespace strings as "not set". */
+  const nonEmptyString = (v: unknown): string | undefined => {
+    if (v === null || v === undefined) return undefined;
+    if (typeof v === 'string') { const t = v.trim(); return t.length > 0 ? t : undefined; }
+    return undefined;
+  };
+
+  // Step 1: Try non-empty string values
+  let severity: string | number | undefined =
+    nonEmptyString(entry.severity) ??
+    nonEmptyString((entry as any).level) ??
+    nonEmptyString((entry as any).syslog_severity) ??
+    nonEmptyString((entry as any).severity_text);
+
+  // Step 2: If no string, check for numeric severity/level (syslog 0-7)
+  if (severity === undefined) {
+    const numCandidate = entry.severity ?? (entry as any).level;
+    if (typeof numCandidate === 'number') {
+      severity = numCandidate;
+    }
+  }
+
+  // Step 3: OTel severity_number (1-24 scale, NOT syslog 0-7).
+  // OTel levels: 1-4=TRACE, 5-8=DEBUG, 9-12=INFO, 13-16=WARN, 17-20=ERROR, 21-24=FATAL
+  // Handles both numeric and string representations (e.g. 17 or "17").
+  if (severity === undefined) {
+    const raw = (entry as any).severity_number;
+    if (raw !== undefined && raw !== null) {
+      const otelSevNum = typeof raw === 'number' ? raw : Number(raw);
+      if (Number.isFinite(otelSevNum) && otelSevNum >= 1) {
+        severity = otelSeverityNumberToString(otelSevNum);
+      }
+    }
+  }
+
+  // Step 4: Syslog PRI field — PRI = facility * 8 + severity (RFC 5424 / RFC 3164)
+  if (severity === undefined) {
+    const pri = (entry as any).pri;
+    if (pri !== undefined && pri !== null) {
+      const priNum = typeof pri === 'number' ? pri : Number(pri);
+      if (Number.isFinite(priNum) && priNum >= 0) {
+        severity = syslogSeverityToString(priNum % 8);
+        // Also extract facility if not already set
+        if (!entry.facility) {
+          const facNum = Math.floor(priNum / 8);
+          (entry as any).facility = syslogFacilityToString(facNum);
+        }
+      }
+    }
+  }
+
+  // Final normalization: convert numbers to names, lowercase strings
   if (typeof severity === 'number') {
     severity = syslogSeverityToString(severity);
   } else if (typeof severity === 'string') {
-    severity = severity.toLowerCase();
+    const trimmed = severity.toLowerCase().trim();
+    severity = trimmed.length > 0 ? trimmed : undefined;
   } else {
-    // Boolean, object, array, etc. — ignore
     severity = undefined;
   }
 
   // Build known fields; everything else goes into raw
   const known = new Set([
     'timestamp', 'time', '@timestamp',
-    'message', 'short_message', 'msg',
-    'severity', 'level', 'syslog_severity',
+    'message', 'short_message', 'msg', 'body',
+    'severity', 'level', 'syslog_severity', 'severity_text', 'severity_number',
     'host', 'hostname', 'source',
     'source_ip', 'fromhost_ip', 'fromhost-ip', 'ip', 'client_ip', 'src_ip',
     'service', 'service_name', 'application',
@@ -67,6 +125,8 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     'trace_id', 'traceId',
     'span_id', 'spanId',
     'external_id', 'connector_id',
+    'pri', 'msgid', 'extradata', // Syslog RFC 5424 parsed fields (consumed above)
+    'collector', 'collector_host', // Fluent Bit metadata fields
     'raw', // Connector adapters pass pre-built raw — don't nest it
   ]);
 
@@ -149,6 +209,39 @@ function syslogSeverityToString(n: number): string {
     4: 'warning', 5: 'notice', 6: 'info', 7: 'debug',
   };
   return map[n] ?? 'info';
+}
+
+/** Convert syslog facility numeric code to a human-readable name (RFC 5424). */
+function syslogFacilityToString(n: number): string {
+  const map: Record<number, string> = {
+    0: 'kern', 1: 'user', 2: 'mail', 3: 'daemon',
+    4: 'auth', 5: 'syslog', 6: 'lpr', 7: 'news',
+    8: 'uucp', 9: 'cron', 10: 'authpriv', 11: 'ftp',
+    12: 'ntp', 13: 'audit', 14: 'alert', 15: 'clock',
+    16: 'local0', 17: 'local1', 18: 'local2', 19: 'local3',
+    20: 'local4', 21: 'local5', 22: 'local6', 23: 'local7',
+  };
+  return map[n] ?? `facility${n}`;
+}
+
+/**
+ * Convert an OpenTelemetry severity_number (1-24) to a syslog-compatible
+ * severity string. OTel spec: https://opentelemetry.io/docs/specs/otel/logs/data-model/#severity-fields
+ *
+ *   1-4  = TRACE   → debug
+ *   5-8  = DEBUG   → debug
+ *   9-12 = INFO    → info
+ *  13-16 = WARN    → warning
+ *  17-20 = ERROR   → error
+ *  21-24 = FATAL   → critical
+ */
+function otelSeverityNumberToString(n: number): string {
+  if (n <= 4) return 'debug';    // TRACE, TRACE2, TRACE3, TRACE4
+  if (n <= 8) return 'debug';    // DEBUG, DEBUG2, DEBUG3, DEBUG4
+  if (n <= 12) return 'info';    // INFO, INFO2, INFO3, INFO4
+  if (n <= 16) return 'warning'; // WARN, WARN2, WARN3, WARN4
+  if (n <= 20) return 'error';   // ERROR, ERROR2, ERROR3, ERROR4
+  return 'critical';             // FATAL, FATAL2, FATAL3, FATAL4
 }
 
 // ── Content-based severity enrichment ────────────────────────
@@ -282,4 +375,68 @@ function enrichSeverityFromContent(
   }
 
   return headerSeverity;
+}
+
+// ── ECS (Elastic Common Schema) field flattening ─────────────
+
+/**
+ * Default ECS → flat field mapping.
+ * Nested ECS fields (e.g. from OpenTelemetry/Beats agents) are flattened
+ * into the ingest API's flat namespace so that normalizeEntry can process them.
+ */
+const ECS_FLAT_MAP: Record<string, string> = {
+  // ECS (Elastic Common Schema)
+  'host.name': 'host',
+  'host.hostname': 'host',
+  'source.ip': 'source_ip',
+  'source.address': 'source_ip',
+  'service.name': 'service',
+  'process.name': 'program',
+  'log.level': 'severity',
+  'log.syslog.facility.name': 'facility',
+  'log.syslog.severity.name': 'severity',
+  'trace.id': 'trace_id',
+  'span.id': 'span_id',
+  'event.original': 'message',
+  '@timestamp': 'timestamp',
+
+  // OpenTelemetry Semantic Conventions
+  'resource.service.name': 'service',
+  'resource.host.name': 'host',
+  'attributes.severity_text': 'severity',
+  'attributes.trace_id': 'trace_id',
+  'attributes.span_id': 'span_id',
+};
+
+/**
+ * Flatten nested ECS fields in an ingest entry into their flat equivalents.
+ *
+ * For example, `{ host: { name: "web-01" } }` becomes `{ host: "web-01" }`.
+ * Only sets a flat field if it is not already populated (explicit values take priority).
+ *
+ * @param entry  The raw ingest entry (mutated in place).
+ * @returns The same entry with flattened ECS fields.
+ */
+export function flattenECS(entry: Record<string, unknown>): Record<string, unknown> {
+  for (const [ecsPath, flatKey] of Object.entries(ECS_FLAT_MAP)) {
+    // Skip if the flat key is already set
+    if (entry[flatKey] !== undefined && entry[flatKey] !== null && entry[flatKey] !== '') continue;
+
+    const value = getNestedValue(entry, ecsPath);
+    if (value !== undefined && value !== null && value !== '') {
+      entry[flatKey] = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    }
+  }
+  return entry;
+}
+
+/** Resolve a dot-notation path from a nested object. */
+function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+  const parts = path.split('.');
+  let current: unknown = obj;
+  for (const part of parts) {
+    if (current == null || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
 }

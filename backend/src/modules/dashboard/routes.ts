@@ -5,12 +5,14 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { CRITERIA } from '../../types/index.js';
 import { localTimestamp } from '../../config/index.js';
 import { writeAuditLog } from '../../middleware/audit.js';
+import { getEventSource, getDefaultEventSource } from '../../services/eventSourceFactory.js';
 
 /**
  * Dashboard-oriented API routes: system overview, drill-down, SSE stream.
  */
 export async function registerDashboardRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
+  const eventSource = getDefaultEventSource(db);
 
   // ── Dashboard overview: systems with latest effective scores ─
   app.get(
@@ -18,10 +20,11 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
     { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (_request, reply) => {
       const systems = await db('monitored_systems').orderBy('name').select('*');
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       const result = [];
       for (const system of systems) {
-        // Latest window for this system
+        // Latest window for this system (used for display metadata)
         const latestWindow = await db('windows')
           .where({ system_id: system.id })
           .orderBy('to_ts', 'desc')
@@ -30,17 +33,29 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         let scores: Record<string, { effective: number; meta: number; max_event: number }> = {};
 
         if (latestWindow) {
+          // Use MAX effective scores across all windows in the last 24 hours.
+          // A single 5-minute window of routine events shouldn't mask elevated
+          // scores from recent windows — this gives a "worst recent state" view
+          // which is more appropriate for security monitoring.
           const effectiveRows = await db('effective_scores')
-            .where({ window_id: latestWindow.id, system_id: system.id })
-            .select('criterion_id', 'effective_value', 'meta_score', 'max_event_score');
+            .join('windows', 'effective_scores.window_id', 'windows.id')
+            .where('effective_scores.system_id', system.id)
+            .where('windows.to_ts', '>=', since24h)
+            .groupBy('effective_scores.criterion_id')
+            .select(
+              'effective_scores.criterion_id',
+              db.raw('MAX(effective_scores.effective_value) as effective_value'),
+              db.raw('MAX(effective_scores.meta_score) as meta_score'),
+              db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
+            );
 
           for (const row of effectiveRows) {
             const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
             if (criterion) {
               scores[criterion.slug] = {
-                effective: row.effective_value,
-                meta: row.meta_score,
-                max_event: row.max_event_score,
+                effective: Number(row.effective_value) || 0,
+                meta: Number(row.meta_score) || 0,
+                max_event: Number(row.max_event_score) || 0,
               };
             }
           }
@@ -52,19 +67,16 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           .count('id as cnt')
           .first();
 
-        // Event count (last 24h)
-        const eventCount = await db('events')
-          .where({ system_id: system.id })
-          .where('timestamp', '>=', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-          .count('id as cnt')
-          .first();
+        // Event count (last 24h) — via EventSource abstraction (per-system dispatch)
+        const sysEventSource = getEventSource(system, db);
+        const eventCount24h = await sysEventSource.countSystemEvents(system.id, since24h);
 
         result.push({
           id: system.id,
           name: system.name,
           description: system.description,
           source_count: Number(sourceCount?.cnt ?? 0),
-          event_count_24h: Number(eventCount?.cnt ?? 0),
+          event_count_24h: eventCount24h,
           latest_window: latestWindow
             ? { id: latestWindow.id, from: latestWindow.from_ts, to: latestWindow.to_ts }
             : null,
@@ -87,26 +99,11 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const rawLimit = Number(request.query.limit ?? 100);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 500) : 100;
 
-      let query = db('events')
-        .where({ system_id: id })
-        .orderBy('timestamp', 'desc')
-        .limit(limit);
-
-      if (from) query = query.where('timestamp', '>=', from);
-      if (to) query = query.where('timestamp', '<=', to);
-
-      const events = await query.select('*');
-
-      // Parse raw JSON (try/catch per row to avoid one corrupt row crashing the endpoint)
-      const result = events.map((e: any) => {
-        let raw = e.raw;
-        if (raw && typeof raw === 'string') {
-          try { raw = JSON.parse(raw); } catch { /* keep as string */ }
-        }
-        return { ...e, raw };
-      });
-
-      return reply.send(result);
+      // Load system to determine event source
+      const system = await db('monitored_systems').where({ id }).first();
+      const sysEventSource = system ? getEventSource(system, db) : eventSource;
+      const events = await sysEventSource.getSystemEvents(id, { from, to, limit });
+      return reply.send(events);
     },
   );
 

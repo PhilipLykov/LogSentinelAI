@@ -12,7 +12,7 @@ import {
   updateSource,
   deleteSource,
 } from '../api';
-import { SystemForm } from './SystemForm';
+import { SystemForm, type SystemFormData } from './SystemForm';
 import { SourceForm } from './SourceForm';
 import { ConfirmDialog } from './ConfirmDialog';
 import { AiConfigSection } from './AiConfigSection';
@@ -23,6 +23,7 @@ import { UserManagementSection } from './UserManagementSection';
 import { ApiKeyManagementSection } from './ApiKeyManagementSection';
 import { AuditLogSection } from './AuditLogSection';
 import { RoleManagementSection } from './RoleManagementSection';
+import { ElasticsearchSettings } from './ElasticsearchSettings';
 import { hasPermission } from '../App';
 
 interface SettingsViewProps {
@@ -30,7 +31,7 @@ interface SettingsViewProps {
   currentUser?: CurrentUser | null;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
+type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'elasticsearch' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
 
 type Modal =
   | { kind: 'create-system' }
@@ -47,6 +48,7 @@ function getDefaultTab(user: CurrentUser | null | undefined): SettingsTab {
   if (hp('ai_config:view')) return 'ai-model';
   if (hp('notifications:view')) return 'notifications';
   if (hp('database:view')) return 'database';
+  if (hp('elasticsearch:view')) return 'elasticsearch';
   if (hp('privacy:view')) return 'privacy';
   if (hp('users:manage')) return 'users';
   if (hp('roles:manage')) return 'roles';
@@ -117,11 +119,18 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
   }, [selectedSystemId, loadSources]);
 
   // ── System CRUD handlers ────────────────────────────────────
-  const handleCreateSystem = async (name: string, description: string, retentionDays: number | null) => {
+  const handleCreateSystem = async (data: SystemFormData) => {
     setSaving(true);
     setError('');
     try {
-      const created = await createSystem({ name, description, retention_days: retentionDays });
+      const created = await createSystem({
+        name: data.name,
+        description: data.description,
+        retention_days: data.retention_days,
+        event_source: data.event_source,
+        es_connection_id: data.es_connection_id,
+        es_config: data.es_config,
+      });
       setSystems((prev) => [...prev, created]);
       setSelectedSystemId(created.id);
       setModal(null);
@@ -133,11 +142,18 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
     }
   };
 
-  const handleUpdateSystem = async (id: string, name: string, description: string, retentionDays: number | null) => {
+  const handleUpdateSystem = async (id: string, data: SystemFormData) => {
     setSaving(true);
     setError('');
     try {
-      const updated = await updateSystem(id, { name, description, retention_days: retentionDays });
+      const updated = await updateSystem(id, {
+        name: data.name,
+        description: data.description,
+        retention_days: data.retention_days,
+        event_source: data.event_source,
+        es_connection_id: data.es_connection_id,
+        es_config: data.es_config,
+      });
       setSystems((prev) => prev.map((s) => (s.id === id ? updated : s)));
       setModal(null);
     } catch (err: unknown) {
@@ -268,6 +284,16 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
             Database
           </button>
         )}
+        {hasPermission(currentUser ?? null, 'elasticsearch:view') && (
+          <button
+            className={`settings-tab${activeTab === 'elasticsearch' ? ' active' : ''}`}
+            onClick={() => setActiveTab('elasticsearch')}
+            role="tab"
+            aria-selected={activeTab === 'elasticsearch'}
+          >
+            Elasticsearch
+          </button>
+        )}
         {hasPermission(currentUser ?? null, 'privacy:view') && (
           <button
             className={`settings-tab${activeTab === 'privacy' ? ' active' : ''}`}
@@ -327,6 +353,8 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         <NotificationsSection onAuthError={onAuthError} />
       ) : activeTab === 'database' ? (
         <DatabaseMaintenanceSection onAuthError={onAuthError} />
+      ) : activeTab === 'elasticsearch' ? (
+        <ElasticsearchSettings onAuthError={onAuthError} />
       ) : activeTab === 'privacy' ? (
         <PrivacySection onAuthError={onAuthError} />
       ) : activeTab === 'users' ? (
@@ -390,7 +418,12 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
                       aria-selected={selectedSystemId === s.id}
                       tabIndex={0}
                     >
-                      <span className="settings-system-name">{s.name}</span>
+                      <span className="settings-system-name">
+                        {s.name}
+                        {s.event_source === 'elasticsearch' && (
+                          <span className="badge badge-info" style={{ marginLeft: '6px', fontSize: '0.7rem' }}>ES</span>
+                        )}
+                      </span>
                       {s.description && (
                         <span className="settings-system-desc">{s.description}</span>
                       )}
@@ -535,7 +568,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
           {modal?.kind === 'create-system' && (
             <SystemForm
               title="Create Monitored System"
-              onSave={(name, desc, retention) => handleCreateSystem(name, desc, retention)}
+              onSave={(data) => handleCreateSystem(data)}
               onCancel={() => setModal(null)}
               saving={saving}
             />
@@ -547,7 +580,10 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
               initialName={modal.system.name}
               initialDescription={modal.system.description}
               initialRetentionDays={modal.system.retention_days}
-              onSave={(name, desc, retention) => handleUpdateSystem(modal.system.id, name, desc, retention)}
+              initialEventSource={modal.system.event_source ?? 'postgresql'}
+              initialEsConnectionId={modal.system.es_connection_id ?? null}
+              initialEsConfig={modal.system.es_config ?? null}
+              onSave={(data) => handleUpdateSystem(modal.system.id, data)}
               onCancel={() => setModal(null)}
               saving={saving}
             />

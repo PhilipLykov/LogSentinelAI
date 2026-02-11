@@ -17,6 +17,7 @@ import { registerUserRoutes } from './modules/users/routes.js';
 import { registerApiKeyRoutes } from './modules/auth/apiKeyRoutes.js';
 import { registerAuditRoutes } from './modules/auth/auditRoutes.js';
 import { registerRoleRoutes } from './modules/roles/routes.js';
+import { registerElasticsearchRoutes } from './modules/elasticsearch/routes.js';
 import { localTimestamp } from './config/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -76,6 +77,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerConnectorRoutes(app);
   await registerFeaturesRoutes(app);
   await registerEventRoutes(app);
+  await registerElasticsearchRoutes(app);
 
   return app;
 }

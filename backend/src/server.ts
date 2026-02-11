@@ -8,6 +8,7 @@ import { OpenAiAdapter } from './modules/llm/adapter.js';
 import { startPipelineScheduler } from './modules/pipeline/orchestrator.js';
 import { startConnectorScheduler } from './modules/connectors/runner.js';
 import { startMaintenanceScheduler } from './modules/maintenance/maintenanceJob.js';
+import { closeAllEsClients } from './services/esClient.js';
 
 /**
  * Parse a millisecond interval from an env var, with safe default.
@@ -63,6 +64,7 @@ async function main(): Promise<void> {
     connectorScheduler.stop();
     pipelineScheduler?.stop();
     try {
+      await closeAllEsClients();
       await app.close();
       await closeDb();
     } catch (err) {

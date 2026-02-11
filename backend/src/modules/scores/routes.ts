@@ -13,54 +13,65 @@ import { resolveAiConfig } from '../llm/aiConfig.js';
 export async function registerScoresRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
 
-  // ── Effective scores per system (latest window) ────────────
+  // ── Effective scores per system (rolling max across recent windows) ──
   app.get<{ Querystring: { from?: string; to?: string } }>(
     '/api/v1/scores/systems',
     { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (request, reply) => {
       const { from, to } = request.query;
 
-      // Get latest window per system
-      let windowQuery = db('windows')
-        .select('windows.*')
-        .distinctOn('system_id')
-        .orderBy('system_id')
-        .orderBy('to_ts', 'desc');
+      // Default to last 24 hours if no time range specified
+      const since = from ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const until = to ?? new Date().toISOString();
 
-      if (from) windowQuery = windowQuery.where('from_ts', '>=', from);
-      if (to) windowQuery = windowQuery.where('to_ts', '<=', to);
-
-      const latestWindows = await windowQuery;
-
+      const systems = await db('monitored_systems').select('*');
       const results = [];
 
-      for (const w of latestWindows) {
-        const system = await db('monitored_systems').where({ id: w.system_id }).first();
+      for (const system of systems) {
+        // Latest window for metadata — use the same time bounds as the scores query
+        const latestWindow = await db('windows')
+          .where({ system_id: system.id })
+          .where('to_ts', '>=', since)
+          .where('to_ts', '<=', until)
+          .orderBy('to_ts', 'desc')
+          .first();
 
+        if (!latestWindow) continue;
+
+        // Rolling max across all windows in the time range
         const scores = await db('effective_scores')
-          .where({ window_id: w.id, system_id: w.system_id })
-          .select('criterion_id', 'effective_value', 'meta_score', 'max_event_score');
+          .join('windows', 'effective_scores.window_id', 'windows.id')
+          .where('effective_scores.system_id', system.id)
+          .where('windows.to_ts', '>=', since)
+          .where('windows.to_ts', '<=', until)
+          .groupBy('effective_scores.criterion_id')
+          .select(
+            'effective_scores.criterion_id',
+            db.raw('MAX(effective_scores.effective_value) as effective_value'),
+            db.raw('MAX(effective_scores.meta_score) as meta_score'),
+            db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
+          );
 
         const scoreMap: Record<string, { effective: number; meta: number; max_event: number }> = {};
         for (const s of scores) {
           const criterion = CRITERIA.find((c) => c.id === s.criterion_id);
           if (criterion) {
             scoreMap[criterion.slug] = {
-              effective: s.effective_value,
-              meta: s.meta_score,
-              max_event: s.max_event_score,
+              effective: Number(s.effective_value) || 0,
+              meta: Number(s.meta_score) || 0,
+              max_event: Number(s.max_event_score) || 0,
             };
           }
         }
 
         results.push({
-          system_id: w.system_id,
-          system_name: system?.name ?? 'Unknown',
-          window_id: w.id,
-          window_from: w.from_ts,
-          window_to: w.to_ts,
+          system_id: system.id,
+          system_name: system.name ?? 'Unknown',
+          window_id: latestWindow.id,
+          window_from: latestWindow.from_ts,
+          window_to: latestWindow.to_ts,
           scores: scoreMap,
-          updated_at: w.created_at,
+          updated_at: latestWindow.created_at,
         });
       }
 
@@ -135,10 +146,10 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         query = query.where('event_scores.criterion_id', Number(criterionId));
       }
 
-      // Filter out zero-score events (only return events that actually
+      // Filter out low-score events (only return events that actually
       // contributed to the criterion score)
       if (minScore > 0) {
-        query = query.where('event_scores.score', '>', 0);
+        query = query.where('event_scores.score', '>', minScore);
       }
 
       const rows = await query;

@@ -64,6 +64,10 @@ export const PERMISSIONS = {
   // Compliance Export
   COMPLIANCE_EXPORT: 'compliance:export',
 
+  // Elasticsearch
+  ELASTICSEARCH_VIEW: 'elasticsearch:view',
+  ELASTICSEARCH_MANAGE: 'elasticsearch:manage',
+
   // Ingest (API key only)
   INGEST: 'ingest',
 } as const;
@@ -100,6 +104,8 @@ export const ALL_PERMISSIONS: ReadonlyArray<{
   { permission: 'rag:use',              label: 'Use RAG / Ask AI',             category: 'AI' },
   { permission: 'ai_usage:view',         label: 'View AI Usage & Costs',        category: 'AI' },
   { permission: 'compliance:export',     label: 'Export Compliance Data',       category: 'Audit' },
+  { permission: 'elasticsearch:view',   label: 'View Elasticsearch Connections', category: 'Elasticsearch' },
+  { permission: 'elasticsearch:manage', label: 'Manage Elasticsearch Connections', category: 'Elasticsearch' },
   { permission: 'ingest',               label: 'Ingest Events (API key only)',  category: 'Ingest' },
 ];
 
@@ -119,6 +125,7 @@ const FALLBACK_ROLE_PERMISSIONS: Record<string, ReadonlySet<Permission>> = {
     PERMISSIONS.USERS_MANAGE, PERMISSIONS.ROLES_MANAGE, PERMISSIONS.API_KEYS_MANAGE,
     PERMISSIONS.AUDIT_VIEW, PERMISSIONS.AUDIT_EXPORT,
     PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW, PERMISSIONS.COMPLIANCE_EXPORT,
+    PERMISSIONS.ELASTICSEARCH_VIEW, PERMISSIONS.ELASTICSEARCH_MANAGE,
   ]),
   auditor: new Set<Permission>([
     PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW,
@@ -127,6 +134,7 @@ const FALLBACK_ROLE_PERMISSIONS: Record<string, ReadonlySet<Permission>> = {
     PERMISSIONS.PRIVACY_VIEW,
     PERMISSIONS.AUDIT_VIEW, PERMISSIONS.AUDIT_EXPORT,
     PERMISSIONS.RAG_USE, PERMISSIONS.AI_USAGE_VIEW, PERMISSIONS.COMPLIANCE_EXPORT,
+    PERMISSIONS.ELASTICSEARCH_VIEW,
   ]),
   monitoring_agent: new Set<Permission>([
     PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.EVENTS_VIEW, PERMISSIONS.EVENTS_ACKNOWLEDGE,

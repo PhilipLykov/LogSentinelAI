@@ -170,6 +170,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
     }
 
     setSelectedCriterion(slug);
+    setCriterionEvents([]); // Clear stale events from previous criterion
     setCriterionLoading(true);
     setCriterionError('');
 
@@ -351,9 +352,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
       {/* ── Criterion drill-down panel ── */}
       {selectedCriterion && (() => {
         const scoreInfo = system.scores[selectedCriterion];
-        const effectivePct = scoreInfo ? Math.round(scoreInfo.effective * 100) : 0;
-        const metaPct = scoreInfo ? Math.round(scoreInfo.meta * 100) : 0;
-        const maxEventPct = scoreInfo ? Math.round(scoreInfo.max_event * 100) : 0;
+        const effectivePct = scoreInfo ? Math.round((Number(scoreInfo.effective) || 0) * 100) : 0;
+        const metaPct = scoreInfo ? Math.round((Number(scoreInfo.meta) || 0) * 100) : 0;
+        const maxEventPct = scoreInfo ? Math.round((Number(scoreInfo.max_event) || 0) * 100) : 0;
         const criterionLabel = CRITERIA_LABELS[selectedCriterion] ?? selectedCriterion;
 
         return (
@@ -375,16 +376,16 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
               <div className="criterion-score-breakdown">
                 <span className="breakdown-item">
                   <strong>Dashboard Score:</strong>{' '}
-                  <span style={{ color: scoreColorFromValue(scoreInfo.effective) }}>{effectivePct}%</span>
+                  <span style={{ color: scoreColorFromValue(Number(scoreInfo.effective) || 0) }}>{effectivePct}%</span>
                 </span>
                 <span className="breakdown-separator">= </span>
                 <span className="breakdown-item" title="Score from AI meta-analysis (holistic assessment of all events together)">
-                  Meta-analysis: <span style={{ color: metaPct > 0 ? scoreColorFromValue(scoreInfo.meta) : 'var(--muted)' }}>{metaPct}%</span>
+                  Meta-analysis: <span style={{ color: metaPct > 0 ? scoreColorFromValue(Number(scoreInfo.meta) || 0) : 'var(--muted)' }}>{metaPct}%</span>
                   <span className="breakdown-weight"> (&times;70%)</span>
                 </span>
                 <span className="breakdown-separator"> + </span>
                 <span className="breakdown-item" title="Highest individual event score for this criterion">
-                  Max event: <span style={{ color: maxEventPct > 0 ? scoreColorFromValue(scoreInfo.max_event) : 'var(--muted)' }}>{maxEventPct}%</span>
+                  Max event: <span style={{ color: maxEventPct > 0 ? scoreColorFromValue(Number(scoreInfo.max_event) || 0) : 'var(--muted)' }}>{maxEventPct}%</span>
                   <span className="breakdown-weight"> (&times;30%)</span>
                 </span>
               </div>
@@ -428,13 +429,14 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                   </thead>
                   <tbody>
                     {criterionEvents.map((ev, idx) => {
-                      const pct = Math.round(ev.score * 100);
+                      const score = Number(ev.score) || 0;
+                      const pct = Math.round(score * 100);
                       return (
                         <tr key={`${ev.event_id}-${idx}`} className="criterion-event-row">
                           <td className="criterion-score-cell">
                             <span
                               className="criterion-score-badge"
-                              style={{ color: scoreColorFromValue(ev.score) }}
+                              style={{ color: scoreColorFromValue(score) }}
                             >
                               {pct}%
                             </span>

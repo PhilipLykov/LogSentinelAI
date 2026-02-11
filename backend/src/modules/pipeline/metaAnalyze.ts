@@ -17,6 +17,7 @@ import {
   type OpenFinding,
 } from './findingDedup.js';
 import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivacyFilter.js';
+import { getEventSource } from '../../services/eventSourceFactory.js';
 
 const DEFAULT_W_META = 0.7;
 /** Number of previous window summaries to include as context. */
@@ -126,21 +127,17 @@ export async function metaAnalyzeWindow(
     'Previously acknowledged by user — use only for pattern recognition context. ' +
     'Do not score, do not raise new findings for these events.';
 
-  // ── Gather events in window ─────────────────────────────
-  let eventQuery = db('events')
-    .where({ system_id: system.id })
-    .where('timestamp', '>=', window.from_ts)
-    .where('timestamp', '<', window.to_ts)
-    .select('id', 'message', 'severity', 'template_id', 'acknowledged_at')
-    .orderBy('timestamp', 'asc')
-    .limit(metaMaxEvents); // Configurable cap for LLM context
-
-  // In "skip" mode, exclude acknowledged events entirely
-  if (ackMode === 'skip') {
-    eventQuery = eventQuery.whereNull('acknowledged_at');
-  }
-
-  const events = await eventQuery;
+  // ── Gather events in window — via EventSource abstraction (system-aware) ──
+  const eventSource = getEventSource(system, db);
+  const events = await eventSource.getEventsInTimeRange(
+    system.id,
+    window.from_ts,
+    window.to_ts,
+    {
+      limit: metaMaxEvents,
+      excludeAcknowledged: ackMode === 'skip',
+    },
+  );
 
   if (events.length === 0) {
     console.log(`[${localTimestamp()}] Meta-analyze: no events in window ${windowId}`);

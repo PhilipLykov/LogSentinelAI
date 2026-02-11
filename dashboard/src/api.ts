@@ -369,6 +369,9 @@ export interface MonitoredSystem {
   name: string;
   description: string;
   retention_days: number | null;
+  event_source?: 'postgresql' | 'elasticsearch';
+  es_config?: Record<string, unknown> | null;
+  es_connection_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -484,7 +487,14 @@ export async function fetchSystems(): Promise<MonitoredSystem[]> {
   return apiFetch('/api/v1/systems');
 }
 
-export async function createSystem(data: { name: string; description?: string; retention_days?: number | null }): Promise<MonitoredSystem> {
+export async function createSystem(data: {
+  name: string;
+  description?: string;
+  retention_days?: number | null;
+  event_source?: string;
+  es_connection_id?: string | null;
+  es_config?: Record<string, unknown> | null;
+}): Promise<MonitoredSystem> {
   return apiFetch('/api/v1/systems', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -493,7 +503,14 @@ export async function createSystem(data: { name: string; description?: string; r
 
 export async function updateSystem(
   id: string,
-  data: { name?: string; description?: string; retention_days?: number | null },
+  data: {
+    name?: string;
+    description?: string;
+    retention_days?: number | null;
+    event_source?: string;
+    es_connection_id?: string | null;
+    es_config?: Record<string, unknown> | null;
+  },
 ): Promise<MonitoredSystem> {
   return apiFetch(`/api/v1/systems/${id}`, {
     method: 'PUT',
@@ -1368,6 +1385,142 @@ export async function purgeLlmUsage(confirmation: string): Promise<{ deleted: nu
     method: 'POST',
     body: JSON.stringify({ confirmation }),
   });
+}
+
+// ── Elasticsearch Connections ─────────────────────────────────
+
+export interface EsConnection {
+  id: string;
+  name: string;
+  url: string;
+  auth_type: 'none' | 'basic' | 'api_key' | 'cloud_id';
+  tls_reject_unauthorized: boolean;
+  ca_cert?: string | null;
+  request_timeout_ms: number;
+  max_retries: number;
+  pool_max_connections: number;
+  is_default: boolean;
+  status: 'unknown' | 'connected' | 'error';
+  last_error?: string | null;
+  last_health_check_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EsConnectionCreatePayload {
+  name: string;
+  url: string;
+  auth_type?: string;
+  credentials?: Record<string, string>;
+  tls_reject_unauthorized?: boolean;
+  ca_cert?: string;
+  request_timeout_ms?: number;
+  max_retries?: number;
+  pool_max_connections?: number;
+  is_default?: boolean;
+}
+
+export async function fetchEsConnections(): Promise<EsConnection[]> {
+  return apiFetch('/api/v1/elasticsearch/connections');
+}
+
+export async function fetchEsConnection(id: string): Promise<EsConnection> {
+  return apiFetch(`/api/v1/elasticsearch/connections/${encodeURIComponent(id)}`);
+}
+
+export async function createEsConnection(data: EsConnectionCreatePayload): Promise<EsConnection> {
+  return apiFetch('/api/v1/elasticsearch/connections', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateEsConnection(id: string, data: Partial<EsConnectionCreatePayload>): Promise<EsConnection> {
+  return apiFetch(`/api/v1/elasticsearch/connections/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteEsConnection(id: string): Promise<{ deleted: boolean }> {
+  return apiFetch(`/api/v1/elasticsearch/connections/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function testEsConnection(id: string): Promise<{ ok: boolean; cluster_name?: string; version?: string; error?: string }> {
+  return apiFetch(`/api/v1/elasticsearch/connections/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+  });
+}
+
+export async function testEsConnectionRaw(data: Partial<EsConnectionCreatePayload>): Promise<{ ok: boolean; cluster_name?: string; version?: string; error?: string }> {
+  return apiFetch('/api/v1/elasticsearch/test', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export interface EsIndex {
+  index: string;
+  health?: string;
+  status?: string;
+  'docs.count'?: string;
+  'store.size'?: string;
+  'creation.date.string'?: string;
+}
+
+export async function fetchEsIndices(connectionId: string, pattern?: string): Promise<EsIndex[]> {
+  const qs = pattern ? `?pattern=${encodeURIComponent(pattern)}` : '';
+  return apiFetch(`/api/v1/elasticsearch/connections/${encodeURIComponent(connectionId)}/indices${qs}`);
+}
+
+export interface EsFieldMapping {
+  path: string;
+  type: string;
+}
+
+export async function fetchEsIndexMapping(connectionId: string, index: string): Promise<{ index: string; fields: EsFieldMapping[] }> {
+  return apiFetch(`/api/v1/elasticsearch/connections/${encodeURIComponent(connectionId)}/mapping?index=${encodeURIComponent(index)}`);
+}
+
+export async function fetchEsIndexPreview(connectionId: string, index: string, size?: number): Promise<{
+  index: string;
+  total: number;
+  sample: Array<{ _id: string; _index: string; _source: Record<string, unknown> }>;
+}> {
+  const sizeQ = size ? `&size=${size}` : '';
+  return apiFetch(`/api/v1/elasticsearch/connections/${encodeURIComponent(connectionId)}/preview?index=${encodeURIComponent(index)}${sizeQ}`);
+}
+
+// ── Database Info ────────────────────────────────────────────
+
+export interface DatabaseInfo {
+  postgresql: {
+    version?: string;
+    database?: string;
+    size?: string;
+    host?: string;
+    port?: string;
+    partitioned?: boolean;
+    top_tables?: Array<{ table_name: string; total_size: string }>;
+    error?: string;
+  };
+  elasticsearch: {
+    connections: Array<{
+      id: string;
+      name: string;
+      url: string;
+      status: string;
+      last_health_check_at?: string;
+      is_default: boolean;
+    }>;
+    total: number;
+  };
+}
+
+export async function fetchDatabaseInfo(): Promise<DatabaseInfo> {
+  return apiFetch('/api/v1/database/info');
 }
 
 /**

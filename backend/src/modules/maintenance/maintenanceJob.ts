@@ -13,6 +13,7 @@
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
 import { loadBackupConfig, runBackup, cleanupOldBackups } from './backupJob.js';
+import { getEventSource } from '../../services/eventSourceFactory.js';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -235,8 +236,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
   //    Even with partitioning, per-system custom retention still needs row-level deletes
   //    for events that fall within a partition that shouldn't be fully dropped.
   try {
-    const systems = await db('monitored_systems')
-      .select('id', 'name', 'retention_days');
+    const systems = await db('monitored_systems').select('*');
 
     for (const system of systems) {
       const retentionDays = system.retention_days ?? config.default_retention_days;
@@ -247,53 +247,23 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       const cutoffIso = cutoffDate.toISOString();
 
       try {
-        // Find old event IDs (batch to avoid memory issues)
-        let systemEventsDeleted = 0;
-        let systemScoresDeleted = 0;
+        // Delete old events + their scores via EventSource abstraction (system-aware)
+        const eventSource = getEventSource(system, db);
+        const result = await eventSource.deleteOldEvents(system.id, cutoffIso);
 
-        // Delete in batches of 1000 to avoid long locks
-        let hasMore = true;
-        while (hasMore) {
-          const oldEventIds = await db('events')
-            .where({ system_id: system.id })
-            .where('timestamp', '<', cutoffIso)
-            .limit(1000)
-            .pluck('id');
-
-          if (oldEventIds.length === 0) {
-            hasMore = false;
-            break;
-          }
-
-          // Delete event_scores for these events
-          for (let i = 0; i < oldEventIds.length; i += 500) {
-            const chunk = oldEventIds.slice(i, i + 500);
-            const deleted = await db('event_scores').whereIn('event_id', chunk).del();
-            systemScoresDeleted += deleted;
-          }
-
-          // Delete the events themselves
-          const eventsDeleted = await db('events').whereIn('id', oldEventIds).del();
-          systemEventsDeleted += eventsDeleted;
-
-          if (oldEventIds.length < 1000) {
-            hasMore = false;
-          }
-        }
-
-        if (systemEventsDeleted > 0) {
+        if (result.deleted_events > 0) {
           systemsCleanedList.push({
             system_id: system.id,
             system_name: system.name,
             retention_days: retentionDays,
-            events_deleted: systemEventsDeleted,
+            events_deleted: result.deleted_events,
           });
-          totalEventsDeleted += systemEventsDeleted;
-          totalScoresDeleted += systemScoresDeleted;
+          totalEventsDeleted += result.deleted_events;
+          totalScoresDeleted += result.deleted_scores;
 
           console.log(
-            `[${localTimestamp()}] Maintenance: ${system.name} — deleted ${systemEventsDeleted} events ` +
-            `and ${systemScoresDeleted} scores older than ${retentionDays} days`,
+            `[${localTimestamp()}] Maintenance: ${system.name} — deleted ${result.deleted_events} events ` +
+            `and ${result.deleted_scores} scores older than ${retentionDays} days`,
           );
         }
       } catch (err: any) {

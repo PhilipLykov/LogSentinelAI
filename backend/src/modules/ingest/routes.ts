@@ -4,7 +4,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
-import { normalizeEntry, computeNormalizedHash } from './normalize.js';
+import { normalizeEntry, computeNormalizedHash, flattenECS } from './normalize.js';
 import { redactEvent } from './redact.js';
 import { matchSource } from './sourceMatch.js';
 import type { IngestEntry, IngestResponse } from '../../types/index.js';
@@ -89,7 +89,8 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           continue;
         }
 
-        // 1. Normalize
+        // 1. Flatten ECS nested fields (e.g. from OTel/Beats agents), then normalize
+        flattenECS(entry as Record<string, unknown>);
         const normalized = normalizeEntry(entry as IngestEntry);
         if (!normalized) {
           rejected++;

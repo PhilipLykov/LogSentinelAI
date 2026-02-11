@@ -21,6 +21,7 @@ import {
 } from '../maintenance/backupJob.js';
 import { PRIVACY_FILTER_DEFAULTS, invalidatePrivacyFilterCache } from '../llm/llmPrivacyFilter.js';
 import { writeAuditLog } from '../../middleware/audit.js';
+import { getDefaultEventSource } from '../../services/eventSourceFactory.js';
 
 /**
  * Phase 7 feature routes: compliance export, RAG query, app config,
@@ -1500,58 +1501,18 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       }
 
       try {
-        // First count how many events will be affected
-        let countQuery = db('events');
-        if (from) countQuery = countQuery.where('timestamp', '>=', from);
-        if (to) countQuery = countQuery.where('timestamp', '<=', to);
-        if (system_id) countQuery = countQuery.where({ system_id });
+        // Delete events + scores via EventSource abstraction
+        const eventSource = getDefaultEventSource(db);
+        const result = await eventSource.bulkDeleteEvents({ from, to, system_id });
 
-        const countResult = await countQuery.count('id as cnt').first();
-        const eventCount = Number(countResult?.cnt ?? 0);
-
-        if (eventCount === 0) {
+        if (result.deleted_events === 0) {
           return reply.send({ deleted_events: 0, deleted_scores: 0, message: 'No events matched the specified criteria.' });
-        }
-
-        // Delete in batches to avoid long locks
-        let totalEventsDeleted = 0;
-        let totalScoresDeleted = 0;
-
-        let hasMore = true;
-        while (hasMore) {
-          let idQuery = db('events').limit(1000);
-          if (from) idQuery = idQuery.where('timestamp', '>=', from);
-          if (to) idQuery = idQuery.where('timestamp', '<=', to);
-          if (system_id) idQuery = idQuery.where({ system_id });
-
-          const eventIds = await idQuery.pluck('id');
-
-          if (eventIds.length === 0) {
-            hasMore = false;
-            break;
-          }
-
-          // Delete event_scores first
-          for (let i = 0; i < eventIds.length; i += 500) {
-            const chunk = eventIds.slice(i, i + 500);
-            const scoresDeleted = await db('event_scores').whereIn('event_id', chunk).del();
-            totalScoresDeleted += scoresDeleted;
-          }
-
-          // Delete events
-          const eventsDeleted = await db('events').whereIn('id', eventIds).del();
-          totalEventsDeleted += eventsDeleted;
-
-          if (eventIds.length < 1000) {
-            hasMore = false;
-          }
         }
 
         // Also clean up stale aggregated data (windows -> meta_results, effective_scores,
         // findings all CASCADE) so the dashboard doesn't show old scores for deleted events.
         let windowsDeleted = 0;
         try {
-          // Build a filter for windows that fall within the deleted time range
           let windowQuery = db('windows');
           if (from) windowQuery = windowQuery.where('from_ts', '>=', from);
           if (to) windowQuery = windowQuery.where('to_ts', '<=', to);
@@ -1560,7 +1521,6 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           const windowIds = await windowQuery.pluck('id');
 
           if (windowIds.length > 0) {
-            // meta_results, effective_scores and findings CASCADE from windows
             for (let i = 0; i < windowIds.length; i += 500) {
               const chunk = windowIds.slice(i, i + 500);
               const deleted = await db('windows').whereIn('id', chunk).del();
@@ -1572,24 +1532,24 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         }
 
         app.log.info(
-          `[${localTimestamp()}] Bulk event deletion: ${totalEventsDeleted} events, ${totalScoresDeleted} scores, ` +
+          `[${localTimestamp()}] Bulk event deletion: ${result.deleted_events} events, ${result.deleted_scores} scores, ` +
           `${windowsDeleted} windows deleted (from=${from ?? 'any'}, to=${to ?? 'any'}, system_id=${system_id ?? 'all'})`,
         );
 
         await writeAuditLog(db, {
           action: 'events_bulk_delete',
           resource_type: 'events',
-          details: { from, to, system_id, deleted_events: totalEventsDeleted },
+          details: { from, to, system_id, deleted_events: result.deleted_events },
           ip: request.ip,
           user_id: request.currentUser?.id,
           session_id: request.currentSession?.id,
         });
 
         return reply.send({
-          deleted_events: totalEventsDeleted,
-          deleted_scores: totalScoresDeleted,
+          deleted_events: result.deleted_events,
+          deleted_scores: result.deleted_scores,
           deleted_windows: windowsDeleted,
-          message: `Successfully deleted ${totalEventsDeleted} events, ${totalScoresDeleted} scores, and ${windowsDeleted} analysis windows.`,
+          message: `Successfully deleted ${result.deleted_events} events, ${result.deleted_scores} scores, and ${windowsDeleted} analysis windows.`,
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Bulk event deletion failed: ${err.message}`);

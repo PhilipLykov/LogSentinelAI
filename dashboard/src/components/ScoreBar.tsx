@@ -46,7 +46,8 @@ export function ScoreBars({ scores, onCriterionClick, selectedCriterion }: Score
       {CRITERIA_ORDER.map((slug) => {
         const info = scores[slug];
         const raw = info?.effective;
-        const value = Number.isFinite(raw) ? raw : 0;
+        // Explicit Number() coercion: PostgreSQL numeric types may arrive as strings
+        const value = Number.isFinite(Number(raw)) ? Number(raw) : 0;
         const pct = Math.round(value * 100);
         const label = CRITERIA_LABELS[slug] ?? slug;
         const isClickable = !!onCriterionClick;

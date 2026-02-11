@@ -39,7 +39,9 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 - **Efficient Indexing** — Composite indexes on system_id + timestamp, severity, source_ip, and full-text search columns. Scheduled REINDEX CONCURRENTLY and VACUUM ANALYZE keep query performance stable as data grows.
 - **Configurable Data Retention** — Global and per-system retention policies automatically purge old events. Combined with partitioning, this allows different systems to have different retention windows (e.g., 30 days for debug logs, 365 days for security events).
 - **Horizontal Event Ingestion** — The stateless ingest API accepts events in three JSON formats (batch, array, single) from any number of log shippers simultaneously. Compatible with Fluent Bit, Vector, Logstash, rsyslog, and custom HTTP clients.
+- **Built-in Log Collector** — Optional Fluent Bit container receives Syslog (UDP/TCP) and OpenTelemetry (OTLP/HTTP + gRPC) and forwards to the ingest API. Deploy with `--profile collector`. ECS fields from OTel/Beats agents are automatically flattened.
 - **Automated Database Backup** — Scheduled pg_dump backups with configurable format (custom binary or plain SQL), retention limits, and direct download from the UI.
+- **Elasticsearch Integration** — Hybrid event storage: each monitored system can read events directly from an existing Elasticsearch cluster (read-only) while AI analysis results stay in PostgreSQL. Supports multiple ES connections, index browser, field auto-detection, and ECS field flattening. No need to duplicate log data.
 
 ### Enterprise-Grade Features
 
@@ -55,29 +57,44 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 ## Architecture
 
 ```
-Syslog / Log Shippers (Fluent Bit, Vector, Logstash, rsyslog)
-    |
-    v
-Ingest API ── Normalize ── Severity Enrich ── Source Match ── Redact ── Persist (PostgreSQL)
-    |
-    v
-Dedup & Template Extraction ── Per-Event LLM Scoring (6 criteria)
-    |
-    v
-Windowing ── Meta-Analysis (LLM) ── Finding Dedup (TF-IDF + Jaccard)
-    |                                       |
-    v                                       v
-Effective Score Blend            Finding Lifecycle Management
-    |                            (severity decay, auto-resolve)
-    v
-Dashboard (React)  <-->  Alerting (Webhook, Pushover, NTfy, Gotify, Telegram)
-    |
-    +-- Event Explorer (search, filter, trace, ack)
-    +-- AI Findings (open, acknowledged, resolved)
-    +-- RAG "Ask AI" (natural language queries)
-    +-- Settings (AI config, prompts, notifications, DB, privacy)
-    +-- User Management (RBAC, API keys, audit log)
-    +-- LLM Usage & Cost Tracking
+                   ┌─────────────────────────────────────────────┐
+                   │         Log Sources                         │
+                   │  Syslog (UDP/TCP)  │  OpenTelemetry (OTLP)  │
+                   │  Beats / Logstash  │  Custom HTTP clients   │
+                   └────────┬──────────────────┬─────────────────┘
+                            │                  │
+              ┌─────────────▼──────────┐       │
+              │  Fluent Bit Collector  │       │
+              │  (--profile collector) │       │
+              │  Syslog + OTel inputs  │       │
+              └─────────────┬──────────┘       │
+                            │                  │
+                   ┌────────▼──────────────────▼─────────────────┐
+                   │             Ingest API (HTTP)               │
+                   │  ECS Flatten → Normalize → Severity Enrich  │
+                   │  → Source Match → Privacy Redact → Persist  │
+                   └────────┬────────────────────────────────────┘
+                            │
+         ┌──────────────────▼───────────────────────────────┐
+         │  Event Storage                                    │
+         │  PostgreSQL (default)  │  Elasticsearch (hybrid)  │
+         └──────────┬─────────────────────┬─────────────────┘
+                    │                     │
+         ┌──────────▼─────────────────────▼─────────────────┐
+         │  AI Pipeline                                      │
+         │  Dedup → Per-Event Scoring → Windowing            │
+         │  → Meta-Analysis → Finding Dedup (TF-IDF)        │
+         └────────────────────┬─────────────────────────────┘
+                              │
+         ┌────────────────────▼─────────────────────────────┐
+         │  Dashboard (React)  ←→  Alerting Engine          │
+         │  • Event Explorer (search, filter, trace, ack)   │
+         │  • AI Findings (open, acknowledged, resolved)    │
+         │  • RAG "Ask AI" (natural language queries)       │
+         │  • Settings (AI, Elasticsearch, privacy, DB)     │
+         │  • User Management (RBAC, API keys, audit log)   │
+         │  • LLM Usage & Cost Tracking                     │
+         └──────────────────────────────────────────────────┘
 ```
 
 ## Tech Stack
@@ -85,7 +102,7 @@ Dashboard (React)  <-->  Alerting (Webhook, Pushover, NTfy, Gotify, Telegram)
 | Component | Technology |
 |-----------|-----------|
 | Backend | Node.js 22, Fastify, TypeScript |
-| Database | PostgreSQL 14+ (partitioned), Knex.js migrations |
+| Database | PostgreSQL 14+ (partitioned), Knex.js migrations, Elasticsearch 7+/8+ (optional, read-only hybrid) |
 | Frontend | React 19, Vite, TypeScript |
 | AI | OpenAI-compatible API (GPT-4o-mini, GPT-4o, Ollama, etc.) |
 | Auth | bcrypt, SHA-256 session tokens, RBAC (20 permissions) |
@@ -126,6 +143,17 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+#### Optional: Enable Log Collector (Syslog + OpenTelemetry)
+
+Add `--profile collector` to receive logs directly via Syslog and OTel:
+
+```bash
+# Set INGEST_API_KEY in .env first (create in Settings > API Keys)
+docker compose --profile db --profile collector up -d --build
+```
+
+This starts a Fluent Bit container listening on **port 5140** (Syslog UDP/TCP) and **port 4318** (OpenTelemetry OTLP/HTTP + gRPC).
+
 #### First Login
 
 ```bash
@@ -159,6 +187,8 @@ All endpoints require authentication via `Authorization: Bearer <session_token>`
 | **RAG** | `POST /api/v1/ask` | Natural language event queries |
 | **AI Config** | `GET/PUT /api/v1/ai-config`, `/ai-prompts` | Model and prompt configuration |
 | **Alerting** | `GET/POST/PUT/DELETE /api/v1/notification-channels`, `/notification-rules`, `/silences` | Notification management |
+| **Elasticsearch** | `GET/POST/PUT/DELETE /api/v1/elasticsearch/connections`, `/test`, `/:id/indices`, `/:id/mapping`, `/:id/preview` | ES connection CRUD, test, index browser |
+| **Database Info** | `GET /api/v1/database/info` | PostgreSQL + Elasticsearch status overview |
 | **Maintenance** | `GET/PUT /api/v1/maintenance-config`, `/backup/*` | DB maintenance and backup |
 | **Privacy** | `GET/PUT /api/v1/privacy-config` | PII masking configuration |
 

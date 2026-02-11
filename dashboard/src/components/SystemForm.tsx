@@ -1,13 +1,26 @@
 import { useState, useRef, useEffect } from 'react';
+import { type EsConnection, fetchEsConnections } from '../api';
 
 interface SystemFormProps {
   title: string;
   initialName?: string;
   initialDescription?: string;
   initialRetentionDays?: number | null;
-  onSave: (name: string, description: string, retentionDays: number | null) => void;
+  initialEventSource?: 'postgresql' | 'elasticsearch';
+  initialEsConnectionId?: string | null;
+  initialEsConfig?: Record<string, unknown> | null;
+  onSave: (data: SystemFormData) => void;
   onCancel: () => void;
   saving: boolean;
+}
+
+export interface SystemFormData {
+  name: string;
+  description: string;
+  retention_days: number | null;
+  event_source: 'postgresql' | 'elasticsearch';
+  es_connection_id: string | null;
+  es_config: Record<string, unknown> | null;
 }
 
 export function SystemForm({
@@ -15,6 +28,9 @@ export function SystemForm({
   initialName = '',
   initialDescription = '',
   initialRetentionDays = null,
+  initialEventSource = 'postgresql',
+  initialEsConnectionId = null,
+  initialEsConfig = null,
   onSave,
   onCancel,
   saving,
@@ -31,9 +47,30 @@ export function SystemForm({
   const nameRef = useRef<HTMLInputElement>(null);
   const mouseDownOnOverlay = useRef(false);
 
+  // Event source state
+  const [eventSource, setEventSource] = useState<'postgresql' | 'elasticsearch'>(initialEventSource);
+  const [esConnectionId, setEsConnectionId] = useState<string | null>(initialEsConnectionId);
+  const [indexPattern, setIndexPattern] = useState<string>((initialEsConfig as any)?.index_pattern ?? '');
+  const [timestampField, setTimestampField] = useState<string>((initialEsConfig as any)?.timestamp_field ?? '@timestamp');
+  const [messageField, setMessageField] = useState<string>((initialEsConfig as any)?.message_field ?? 'message');
+
+  // ES connections list
+  const [esConnections, setEsConnections] = useState<EsConnection[]>([]);
+  const [esLoading, setEsLoading] = useState(false);
+
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
+
+  // Load ES connections when Elasticsearch is selected
+  useEffect(() => {
+    if (eventSource !== 'elasticsearch') return;
+    setEsLoading(true);
+    fetchEsConnections()
+      .then(setEsConnections)
+      .catch(() => { /* ignore */ })
+      .finally(() => setEsLoading(false));
+  }, [eventSource]);
 
   // Close on Escape
   useEffect(() => {
@@ -62,7 +99,23 @@ export function SystemForm({
       }
     }
 
-    onSave(trimmed, description.trim(), finalRetention);
+    let esConfig: Record<string, unknown> | null = null;
+    if (eventSource === 'elasticsearch') {
+      esConfig = {
+        index_pattern: indexPattern.trim(),
+        timestamp_field: timestampField.trim() || '@timestamp',
+        message_field: messageField.trim() || 'message',
+      };
+    }
+
+    onSave({
+      name: trimmed,
+      description: description.trim(),
+      retention_days: finalRetention,
+      event_source: eventSource,
+      es_connection_id: eventSource === 'elasticsearch' ? esConnectionId : null,
+      es_config: esConfig,
+    });
   };
 
   return (
@@ -108,6 +161,106 @@ export function SystemForm({
             />
           </div>
 
+          {/* ── Event Source ── */}
+          <div className="form-group">
+            <label>Event Source</label>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="event-source"
+                  checked={eventSource === 'postgresql'}
+                  onChange={() => setEventSource('postgresql')}
+                />
+                PostgreSQL (local events)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="event-source"
+                  checked={eventSource === 'elasticsearch'}
+                  onChange={() => setEventSource('elasticsearch')}
+                />
+                Elasticsearch (external)
+              </label>
+            </div>
+            <span className="field-hint" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+              {eventSource === 'postgresql'
+                ? 'Events are received via the ingest API and stored in PostgreSQL.'
+                : 'Events are read directly from an Elasticsearch cluster. AI analysis results are stored locally.'}
+            </span>
+          </div>
+
+          {/* ── Elasticsearch Configuration ── */}
+          {eventSource === 'elasticsearch' && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '0.75rem', marginBottom: '0.75rem' }}>
+              <div className="form-group">
+                <label htmlFor="es-connection">Elasticsearch Connection *</label>
+                {esLoading ? (
+                  <span className="text-sm">Loading connections...</span>
+                ) : esConnections.length === 0 ? (
+                  <span className="text-sm" style={{ color: 'var(--danger, #e74c3c)' }}>
+                    No Elasticsearch connections configured. Add one in the Elasticsearch tab first.
+                  </span>
+                ) : (
+                  <select
+                    id="es-connection"
+                    className="form-input"
+                    value={esConnectionId ?? ''}
+                    onChange={e => setEsConnectionId(e.target.value || null)}
+                  >
+                    <option value="">-- Select connection --</option>
+                    {esConnections.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.url}) {c.is_default ? '[Default]' : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="es-index-pattern">Index Pattern *</label>
+                <input
+                  id="es-index-pattern"
+                  type="text"
+                  className="form-input"
+                  value={indexPattern}
+                  onChange={e => setIndexPattern(e.target.value)}
+                  placeholder="e.g. filebeat-*, logs-*"
+                />
+                <span className="field-hint" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block' }}>
+                  Elasticsearch index pattern to query for this system's events.
+                </span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                <div className="form-group">
+                  <label htmlFor="es-ts-field">Timestamp Field</label>
+                  <input
+                    id="es-ts-field"
+                    type="text"
+                    className="form-input"
+                    value={timestampField}
+                    onChange={e => setTimestampField(e.target.value)}
+                    placeholder="@timestamp"
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="es-msg-field">Message Field</label>
+                  <input
+                    id="es-msg-field"
+                    type="text"
+                    className="form-input"
+                    value={messageField}
+                    onChange={e => setMessageField(e.target.value)}
+                    placeholder="message"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="form-group">
             <label>Data Retention</label>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px' }}>
@@ -146,7 +299,9 @@ export function SystemForm({
               </div>
             )}
             <span className="field-hint" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-              How long to keep events for this system. Set to 0 to keep forever.
+              {eventSource === 'elasticsearch'
+                ? 'For Elasticsearch systems, this controls how long AI analysis metadata is retained locally.'
+                : 'How long to keep events for this system. Set to 0 to keep forever.'}
             </span>
           </div>
 
@@ -155,7 +310,7 @@ export function SystemForm({
               Cancel
             </button>
             <button type="submit" className="btn" disabled={saving || !name.trim()}>
-              {saving ? 'Saving…' : 'Save'}
+              {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
         </form>

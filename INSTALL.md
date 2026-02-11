@@ -157,6 +157,105 @@ cp .env.example .env
 | `TZ` | No | `Europe/Chisinau` | Application timezone |
 | `DB_EXTERNAL_PORT` | No | `127.0.0.1:5432` | Expose PostgreSQL to host network |
 
+### Elasticsearch Integration (Optional)
+
+LogSentinel AI can read events directly from an existing Elasticsearch cluster. This is a **hybrid** model: events stay in Elasticsearch (read-only), while AI analysis results, acknowledgments, and metadata are stored in PostgreSQL.
+
+**Setup Steps:**
+
+1. Go to **Settings > Elasticsearch** in the web UI.
+2. Click **"+ Add Connection"** and enter your ES cluster URL, authentication, and TLS settings.
+3. Click **"Test Connection"** to verify.
+4. Use the **Index Browser** to explore indices and field mappings.
+5. When creating or editing a **Monitored System**, select **"Elasticsearch (external)"** as the event source.
+6. Choose the ES connection, enter an index pattern (e.g., `filebeat-*`), and configure field mappings.
+
+**Supported Authentication Types:** None, Basic (username/password), API Key, Elastic Cloud ID.
+
+**Supported ES Versions:** Elasticsearch 7.x, 8.x, and OpenSearch 2.x.
+
+**Important Notes:**
+- LogSentinel AI **never writes to or deletes from** your Elasticsearch cluster. It is read-only.
+- PostgreSQL is still required for AI analysis results, user data, audit log, and ES event metadata (acknowledgments, template IDs).
+- ECS (Elastic Common Schema) fields are automatically flattened for compatibility with the ingest API.
+
+### Log Collector — Syslog & OpenTelemetry (Optional)
+
+LogSentinel AI includes a built-in **Fluent Bit** log collector that receives logs from network sources and forwards them to the ingest API.
+
+**Enable with:** `docker compose --profile collector up -d`
+
+#### Supported Inputs
+
+| Protocol | Port (default) | Description |
+|----------|---------------|-------------|
+| **Syslog UDP** | 5140/udp | RFC 3164 — routers, switches, firewalls, legacy Linux |
+| **Syslog TCP** | 5140/tcp | RFC 5424 — rsyslog, syslog-ng, modern systems |
+| **OpenTelemetry** | 4318 | OTLP/HTTP (`/v1/logs`, `/v1/traces`, `/v1/metrics`) + OTLP/gRPC on the same port |
+
+#### Setup Steps
+
+1. Create an API key in **Settings > API Keys** with the `ingest` scope.
+2. Set `INGEST_API_KEY` in your `.env` file.
+3. Start the collector:
+
+```bash
+docker compose --profile collector up -d
+```
+
+4. Configure your log sources to send to the collector:
+
+**Syslog (rsyslog example):**
+
+Add to `/etc/rsyslog.d/60-logsentinel.conf`:
+```
+# Forward all logs to LogSentinel AI collector via TCP
+action(type="omfwd" Target="<your-server-ip>" Port="5140" Protocol="tcp")
+```
+
+**OpenTelemetry (OTel SDK / Collector example):**
+
+Configure your OTel exporter endpoint:
+```yaml
+# OTel Collector config (otel-collector.yaml)
+exporters:
+  otlphttp:
+    endpoint: "http://<your-server-ip>:4318"
+```
+
+Or for application SDKs, set the environment variable:
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://<your-server-ip>:4318
+```
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `INGEST_API_KEY` | *(required)* | API key for authenticating with the ingest API |
+| `SYSLOG_UDP_PORT` | `5140` | Syslog UDP listen port |
+| `SYSLOG_TCP_PORT` | `5140` | Syslog TCP listen port |
+| `OTEL_PORT` | `4318` | OpenTelemetry OTLP listen port (HTTP + gRPC) |
+| `COLLECTOR_LOG_LEVEL` | `info` | Fluent Bit log level (`error`, `warn`, `info`, `debug`) |
+
+#### Monitoring the Collector
+
+Fluent Bit exposes a health/metrics endpoint on port **2020**:
+```bash
+# Health check
+curl http://localhost:2020/api/v1/health
+
+# Metrics (Prometheus format)
+curl http://localhost:2020/api/v1/metrics/prometheus
+```
+
+#### Notes
+
+- Port **5140** is used instead of 514 to avoid requiring root/privileged mode. You can change this in `.env` or configure your syslog sources to send to 5140.
+- The OpenTelemetry input accepts **logs, metrics, and traces**. Currently, LogSentinel AI processes logs; metrics and traces are forwarded but may not be fully analyzed.
+- ECS (Elastic Common Schema) fields from OTel/Beats agents are automatically flattened by the ingest API (e.g., `host.name` → `host`, `source.ip` → `source_ip`).
+- You can also run Fluent Bit **outside Docker** and point its HTTP output at your LogSentinel AI backend's ingest API.
+
 ### Managing the Stack
 
 ```bash
@@ -504,6 +603,8 @@ The ingest API accepts three JSON formats:
 
 ### Fluent Bit
 
+> **Tip:** LogSentinel AI includes a built-in Fluent Bit log collector (see [Log Collector](#log-collector--syslog--opentelemetry-optional) above). If you prefer to run your own Fluent Bit instance, use the output config below:
+
 ```ini
 [OUTPUT]
     Name        http
@@ -545,7 +646,7 @@ output {
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `message` / `msg` / `short_message` | **Yes** | Log message content |
+| `message` / `msg` / `short_message` / `body` | **Yes** | Log message content |
 | `timestamp` / `time` / `@timestamp` | No | ISO 8601 or Unix epoch |
 | `severity` / `level` | No | Syslog severity name or number (0-7) |
 | `host` / `hostname` / `source` | No | Originating hostname |
@@ -557,6 +658,52 @@ output {
 | `span_id` / `spanId` | No | Span ID |
 
 Unknown fields are preserved in a `raw` JSON column.
+
+### OpenTelemetry Integration
+
+LogSentinel AI supports OpenTelemetry log ingestion in two ways:
+
+#### Option A: Built-in Collector (recommended)
+
+Enable the Fluent Bit collector with `--profile collector` (see [Log Collector](#log-collector--syslog--opentelemetry-optional) above). It accepts OTLP on port **4318** (both HTTP and gRPC).
+
+Configure your OpenTelemetry agents/SDKs to export to it:
+
+```bash
+# Environment variable for OTel SDKs
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://<your-server-ip>:4318
+
+# Or for logs only
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://<your-server-ip>:4318/v1/logs
+```
+
+**OTel Collector configuration** (if using an OTel Collector as a relay):
+
+```yaml
+exporters:
+  otlphttp:
+    endpoint: "http://<your-server-ip>:4318"
+    # No TLS for internal network; add tls: config for production
+service:
+  pipelines:
+    logs:
+      exporters: [otlphttp]
+```
+
+#### Option B: Direct HTTP Ingest
+
+OTel agents that support HTTP output can send directly to the ingest API. ECS (Elastic Common Schema) fields are automatically flattened:
+
+| OTel / ECS Field | LogSentinel AI Field |
+|------------------|---------------------|
+| `host.name` | `host` |
+| `source.ip` | `source_ip` |
+| `service.name` | `service` |
+| `process.name` | `program` |
+| `log.level` | `severity` |
+| `trace.id` | `trace_id` |
+| `span.id` | `span_id` |
+| `@timestamp` | `timestamp` |
 
 ---
 

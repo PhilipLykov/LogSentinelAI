@@ -6,6 +6,7 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { writeAuditLog } from '../../middleware/audit.js';
 import type { CreateSystemBody, UpdateSystemBody } from '../../types/index.js';
+import { getEventSource } from '../../services/eventSourceFactory.js';
 
 /**
  * CRUD for monitored_systems.
@@ -40,7 +41,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
     '/api/v1/systems',
     { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
-      const { name, description, retention_days } = request.body ?? {};
+      const { name, description, retention_days, event_source, es_connection_id, es_config } = request.body ?? {} as any;
 
       if (!name || typeof name !== 'string' || name.trim().length === 0) {
         return reply.code(400).send({ error: '"name" is required and must be a non-empty string.' });
@@ -54,6 +55,18 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         }
       }
 
+      // Validate event_source
+      const validSources = ['postgresql', 'elasticsearch'];
+      const effectiveSource = event_source && validSources.includes(event_source) ? event_source : 'postgresql';
+
+      // Validate ES connection if Elasticsearch source is selected
+      if (effectiveSource === 'elasticsearch' && es_connection_id) {
+        const esConn = await db('elasticsearch_connections').where({ id: es_connection_id }).first();
+        if (!esConn) {
+          return reply.code(400).send({ error: 'Selected Elasticsearch connection does not exist.' });
+        }
+      }
+
       const id = uuidv4();
       const now = new Date().toISOString();
 
@@ -62,6 +75,9 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         name: name.trim(),
         description: (description ?? '').trim(),
         retention_days: retention_days !== undefined ? retention_days : null,
+        event_source: effectiveSource,
+        es_connection_id: effectiveSource === 'elasticsearch' ? (es_connection_id ?? null) : null,
+        es_config: es_config ? JSON.stringify(es_config) : null,
         created_at: now,
         updated_at: now,
       });
@@ -91,7 +107,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       const existing = await db('monitored_systems').where({ id }).first();
       if (!existing) return reply.code(404).send({ error: 'System not found' });
 
-      const { name, description, retention_days } = request.body ?? {};
+      const { name, description, retention_days, event_source, es_connection_id, es_config } = request.body ?? {} as any;
       const updates: Record<string, any> = { updated_at: new Date().toISOString() };
 
       if (name !== undefined) {
@@ -113,6 +129,27 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
           }
           updates.retention_days = rd;
         }
+      }
+
+      // Event source updates
+      if (event_source !== undefined) {
+        const validSources = ['postgresql', 'elasticsearch'];
+        if (!validSources.includes(event_source)) {
+          return reply.code(400).send({ error: '"event_source" must be "postgresql" or "elasticsearch".' });
+        }
+        updates.event_source = event_source;
+      }
+      if (es_connection_id !== undefined) {
+        if (es_connection_id !== null) {
+          const esConn = await db('elasticsearch_connections').where({ id: es_connection_id }).first();
+          if (!esConn) {
+            return reply.code(400).send({ error: 'Selected Elasticsearch connection does not exist.' });
+          }
+        }
+        updates.es_connection_id = es_connection_id;
+      }
+      if (es_config !== undefined) {
+        updates.es_config = es_config ? JSON.stringify(es_config) : null;
       }
 
       await db('monitored_systems').where({ id }).update(updates);
@@ -143,6 +180,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       if (!existing) return reply.code(404).send({ error: 'System not found' });
 
       // Cascade delete related data to avoid orphaned records
+      const eventSource = getEventSource(existing, db);
       await db.transaction(async (trx) => {
         // Delete effective scores (depends on windows)
         await trx('effective_scores').where({ system_id: id }).del();
@@ -158,15 +196,10 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         await trx('alert_history').where({ system_id: id }).del();
         // Delete windows
         await trx('windows').where({ system_id: id }).del();
-        // Delete event scores (depends on events)
-        const eventIds = await trx('events').where({ system_id: id }).pluck('id');
-        if (eventIds.length > 0) {
-          for (let i = 0; i < eventIds.length; i += 500) {
-            await trx('event_scores').whereIn('event_id', eventIds.slice(i, i + 500)).del();
-          }
-        }
-        // Delete events
-        await trx('events').where({ system_id: id }).del();
+        // Delete event scores + events via EventSource abstraction
+        await eventSource.cascadeDeleteSystem(id, trx);
+        // Delete ES event metadata (if any)
+        await trx('es_event_metadata').where({ system_id: id }).del();
         // Delete log sources
         await trx('log_sources').where({ system_id: id }).del();
         // Delete message templates
