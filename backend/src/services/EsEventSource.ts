@@ -133,8 +133,8 @@ export class EsEventSource implements EventSource {
   }
 
   /** Build the base ES query (index pattern + optional query filter). */
-  private baseQuery(): { index: string; query: Record<string, unknown> } {
-    const must: unknown[] = [];
+  private baseQuery(): { index: string; query: any } {
+    const must: any[] = [];
     if (this.config.query_filter && Object.keys(this.config.query_filter).length > 0) {
       must.push(this.config.query_filter);
     }
@@ -146,7 +146,7 @@ export class EsEventSource implements EventSource {
 
   /** Add time range to a bool query. */
   private addTimeRange(
-    boolQuery: Record<string, unknown>,
+    boolQuery: Record<string, any>,
     fromTs?: string | null,
     toTs?: string | null,
     operator: 'gte_lte' | 'gte_lt' = 'gte_lte',
@@ -175,8 +175,8 @@ export class EsEventSource implements EventSource {
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), MAX_LIMIT) : DEFAULT_LIMIT;
 
     // Build query
-    const must: unknown[] = [];
-    const filter: unknown[] = [];
+    const must: any[] = [];
+    const filter: any[] = [];
 
     // Inherit base query
     if (base.query && (base.query as any).bool?.must) {
@@ -229,7 +229,7 @@ export class EsEventSource implements EventSource {
       }
     }
 
-    const query: Record<string, unknown> = {
+    const query: any = {
       bool: {
         ...(must.length > 0 ? { must } : {}),
         ...(filter.length > 0 ? { filter } : {}),
@@ -237,15 +237,15 @@ export class EsEventSource implements EventSource {
     };
 
     // If bool is empty, use match_all
-    const boolObj = query.bool as Record<string, unknown>;
-    const hasContent = (boolObj.must && (boolObj.must as unknown[]).length > 0) ||
-                       (boolObj.filter && (boolObj.filter as unknown[]).length > 0);
+    const boolObj = query.bool as Record<string, any>;
+    const hasContent = (boolObj.must && (boolObj.must as any[]).length > 0) ||
+                       (boolObj.filter && (boolObj.filter as any[]).length > 0);
     const finalQuery = hasContent ? query : { match_all: {} };
 
     // Sort
     const sortColumn = ALLOWED_SORT_COLUMNS.has(filters.sort_by ?? '') ? filters.sort_by! : 'timestamp';
-    const sortDirection = filters.sort_dir === 'asc' ? 'asc' : 'desc';
-    const sort = [
+    const sortDirection = filters.sort_dir === 'asc' ? 'asc' as const : 'desc' as const;
+    const sort: any[] = [
       { [this.esField(sortColumn)]: { order: sortDirection, unmapped_type: 'date' } },
       { _id: { order: 'asc' as const } },
     ];
@@ -286,13 +286,13 @@ export class EsEventSource implements EventSource {
     const tsField = this.esField('timestamp');
     const timeFilter = { range: { [tsField]: { gte: since } } };
 
-    const baseFilter: unknown[] = [];
+    const baseFilter: any[] = [];
     if ((base.query as any)?.bool?.must) {
       baseFilter.push(...(base.query as any).bool.must);
     }
     baseFilter.push(timeFilter);
 
-    const aggs: Record<string, unknown> = {
+    const aggs: Record<string, any> = {
       severities: { terms: { field: this.esField('severity'), size: FACET_LIMIT } },
       hosts: { terms: { field: this.esField('host'), size: FACET_LIMIT } },
       source_ips: { terms: { field: this.esField('source_ip'), size: FACET_LIMIT } },
@@ -326,11 +326,11 @@ export class EsEventSource implements EventSource {
     const client = await this.getClient();
     const base = this.baseQuery();
 
-    const filter: unknown[] = [];
+    const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
     filter.push({ range: { [this.esField('timestamp')]: { gte: fromTs, lte: toTs } } });
 
-    const should: unknown[] = [];
+    const should: any[] = [];
     if (field === 'trace_id' || field === 'all') {
       should.push({ term: { [this.esField('trace_id')]: value } });
     }
@@ -368,7 +368,7 @@ export class EsEventSource implements EventSource {
   ): Promise<LogEvent[]> {
     const client = await this.getClient();
     const base = this.baseQuery();
-    const filter: unknown[] = [];
+    const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
 
     const tsField = this.esField('timestamp');
@@ -397,7 +397,7 @@ export class EsEventSource implements EventSource {
   async countSystemEvents(systemId: string, since: string): Promise<number> {
     const client = await this.getClient();
     const base = this.baseQuery();
-    const filter: unknown[] = [];
+    const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
     filter.push({ range: { [this.esField('timestamp')]: { gte: since } } });
 
@@ -420,7 +420,7 @@ export class EsEventSource implements EventSource {
     // filter out those already scored in PG.
     const client = await this.getClient();
     const base = this.baseQuery();
-    const filter: unknown[] = [];
+    const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
 
     // Only look at last 24h to bound the search
@@ -476,7 +476,7 @@ export class EsEventSource implements EventSource {
   ): Promise<LogEvent[]> {
     const client = await this.getClient();
     const base = this.baseQuery();
-    const filter: unknown[] = [];
+    const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
     filter.push({ range: { [this.esField('timestamp')]: { gte: fromTs, lt: toTs } } });
 
@@ -515,7 +515,7 @@ export class EsEventSource implements EventSource {
   ): Promise<number> {
     const client = await this.getClient();
     const base = this.baseQuery();
-    const filter: unknown[] = [];
+    const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
     filter.push({ range: { [this.esField('timestamp')]: { gte: fromTs, lt: toTs } } });
 
@@ -534,7 +534,7 @@ export class EsEventSource implements EventSource {
     // We first query ES for matching event IDs, then upsert metadata.
     const client = await this.getClient();
     const base = this.baseQuery();
-    const esFilter: unknown[] = [];
+    const esFilter: any[] = [];
     if ((base.query as any)?.bool?.must) esFilter.push(...(base.query as any).bool.must);
 
     const tsField = this.esField('timestamp');
@@ -557,7 +557,7 @@ export class EsEventSource implements EventSource {
     if (countResult.count === 0) return 0;
 
     // Use search_after for efficient pagination
-    let searchAfter: unknown[] | undefined;
+    let searchAfter: any[] | undefined;
     let hasMore = true;
 
     while (hasMore) {
@@ -614,7 +614,7 @@ export class EsEventSource implements EventSource {
     // then clear ack in PG.
     const client = await this.getClient();
     const base = this.baseQuery();
-    const esFilter: unknown[] = [];
+    const esFilter: any[] = [];
     if ((base.query as any)?.bool?.must) esFilter.push(...(base.query as any).bool.must);
 
     const tsField = this.esField('timestamp');

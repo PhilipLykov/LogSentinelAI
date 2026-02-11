@@ -10,7 +10,11 @@
  * is plaintext JSON (still only in PostgreSQL, never exposed to the browser).
  */
 
-import { Client, type ClientOptions } from '@elastic/elasticsearch';
+import { Client } from '@elastic/elasticsearch';
+
+// ClientOptions is not re-exported from the ESM entry in v9.x;
+// infer it from the Client constructor signature instead.
+type ClientOptions = NonNullable<ConstructorParameters<typeof Client>[0]>;
 import type { Knex } from 'knex';
 import { getDb } from '../db/index.js';
 import { localTimestamp } from '../config/index.js';

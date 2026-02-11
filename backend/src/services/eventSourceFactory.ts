@@ -36,7 +36,7 @@ export function getEventSource(system?: SystemLike | null, db?: Knex): EventSour
     return new EsEventSource(
       system.id,
       system.es_connection_id,
-      system.es_config as EsSystemConfig,
+      system.es_config as unknown as EsSystemConfig,
       db,
     );
   }
