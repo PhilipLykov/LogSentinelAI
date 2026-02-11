@@ -190,7 +190,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       } else {
         // PG-backed system: use the efficient JOIN
         let query = db('event_scores')
-          .join('events', 'event_scores.event_id', 'events.id')
+          .joinRaw('JOIN events ON event_scores.event_id = events.id::text')
           .join('criteria', 'event_scores.criterion_id', 'criteria.id')
           .where('events.system_id', systemId)
           .where('event_scores.score_type', 'event')

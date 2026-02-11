@@ -266,7 +266,7 @@ export class PgEventSource implements EventSource {
     limit: number,
   ): Promise<LogEvent[]> {
     let query = this.db('events')
-      .leftJoin('event_scores', 'events.id', 'event_scores.event_id')
+      .joinRaw('LEFT JOIN event_scores ON events.id::text = event_scores.event_id')
       .whereNull('event_scores.id')
       .whereNull('events.acknowledged_at')
       .select(
