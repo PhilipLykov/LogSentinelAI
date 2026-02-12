@@ -73,12 +73,15 @@ services:
     ports:
       - "${SYSLOG_UDP_PORT:-5140}:${SYSLOG_UDP_PORT:-5140}/udp"
       - "${SYSLOG_TCP_PORT:-5140}:${SYSLOG_TCP_PORT:-5140}/tcp"
+      - "${SYSLOG_RFC5424_PORT:-5141}:${SYSLOG_RFC5424_PORT:-5141}/tcp"
       - "${OTEL_PORT:-4318}:${OTEL_PORT:-4318}"
       - "2020:2020"   # Fluent Bit health/metrics endpoint
     environment:
-      # Syslog listener ports
+      # Syslog listener ports (RFC 3164 — used by most devices)
       - SYSLOG_UDP_PORT=${SYSLOG_UDP_PORT:-5140}
       - SYSLOG_TCP_PORT=${SYSLOG_TCP_PORT:-5140}
+      # Syslog RFC 5424 (modern format, separate TCP port)
+      - SYSLOG_RFC5424_PORT=${SYSLOG_RFC5424_PORT:-5141}
       # OpenTelemetry OTLP port (gRPC + HTTP on same port)
       - OTEL_PORT=${OTEL_PORT:-4318}
       # LogSentinel AI backend connection
