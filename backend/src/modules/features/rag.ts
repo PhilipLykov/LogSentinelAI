@@ -25,7 +25,7 @@ export interface RagResult {
 
 /** Compute dynamic limit for meta_results based on the requested time range. */
 function computeMetaLimit(from?: string, to?: string): number {
-  if (!from && !to) return 100; // "All time" — generous limit
+  if (!from && !to) return 100; // "All time" handled separately with two-phase fetch
 
   const fromMs = from ? new Date(from).getTime() : Date.now() - 365 * 24 * 60 * 60 * 1000;
   const toMs = to ? new Date(to).getTime() : Date.now();
@@ -131,37 +131,93 @@ export async function askQuestion(
   });
 
   // ── 2. Query meta_result summaries (secondary context) ──
-  const metaLimit = computeMetaLimit(options?.from, options?.to);
+  // "All time" uses a two-phase fetch to cover both recent detail and
+  // historical breadth (up to 30 days). Custom ranges use a single query.
+  const isAllTime = !options?.from && !options?.to;
 
-  let metaQuery = db('meta_results')
-    .join('windows', 'meta_results.window_id', 'windows.id')
-    .join('monitored_systems', 'windows.system_id', 'monitored_systems.id')
-    .orderBy('meta_results.created_at', 'desc')
-    .limit(metaLimit)
-    .select(
-      'monitored_systems.name as system_name',
-      'windows.from_ts',
-      'windows.to_ts',
-      'meta_results.summary',
-      'meta_results.findings',
-      'meta_results.recommended_action',
-    );
+  let metaRows: any[];
 
-  if (options?.systemId) {
-    metaQuery = metaQuery.where('windows.system_id', options.systemId);
-  }
-  if (options?.from) {
-    metaQuery = metaQuery.where('windows.from_ts', '>=', options.from);
-  }
-  if (options?.to) {
-    metaQuery = metaQuery.where('windows.to_ts', '<=', options.to);
-  }
+  if (isAllTime) {
+    // Phase 1: Recent 48 hours — detailed recent context
+    let recentQuery = db('meta_results')
+      .join('windows', 'meta_results.window_id', 'windows.id')
+      .join('monitored_systems', 'windows.system_id', 'monitored_systems.id')
+      .where('windows.from_ts', '>=', db.raw("NOW() - INTERVAL '48 hours'"))
+      .orderBy('meta_results.created_at', 'desc')
+      .limit(100)
+      .select(
+        'monitored_systems.name as system_name',
+        'windows.from_ts',
+        'windows.to_ts',
+        'meta_results.summary',
+        'meta_results.findings',
+        'meta_results.recommended_action',
+      );
+    if (options?.systemId) {
+      recentQuery = recentQuery.where('windows.system_id', options.systemId);
+    }
+    const recentRows = await recentQuery;
 
-  const metaRows = await metaQuery;
+    // Phase 2: Historical 2–30 days — one summary per day per system using
+    // PostgreSQL DISTINCT ON to efficiently sample without fetching thousands of rows.
+    // Uses parameterized query (OWASP A03) — never interpolate user input into SQL.
+    const histSql = `
+      SELECT DISTINCT ON (date_trunc('day', w.from_ts), w.system_id)
+        ms.name as system_name,
+        w.from_ts,
+        w.to_ts,
+        mr.summary,
+        mr.findings,
+        mr.recommended_action
+      FROM meta_results mr
+      JOIN windows w ON mr.window_id = w.id
+      JOIN monitored_systems ms ON w.system_id = ms.id
+      WHERE w.from_ts >= NOW() - INTERVAL '30 days'
+        AND w.from_ts < NOW() - INTERVAL '48 hours'
+        ${options?.systemId ? 'AND w.system_id = ?' : ''}
+      ORDER BY date_trunc('day', w.from_ts) DESC, w.system_id, mr.created_at DESC
+      LIMIT 100
+    `;
+    const histBindings = options?.systemId ? [options.systemId] : [];
+    const historicalRows = await db.raw(histSql, histBindings);
+
+    // Merge: recent (newest first) + historical (newest first)
+    const histRows = historicalRows.rows ?? historicalRows;
+    metaRows = [...recentRows, ...histRows];
+  } else {
+    // Custom range — single query with time filters
+    const metaLimit = computeMetaLimit(options?.from, options?.to);
+
+    let metaQuery = db('meta_results')
+      .join('windows', 'meta_results.window_id', 'windows.id')
+      .join('monitored_systems', 'windows.system_id', 'monitored_systems.id')
+      .orderBy('meta_results.created_at', 'desc')
+      .limit(metaLimit)
+      .select(
+        'monitored_systems.name as system_name',
+        'windows.from_ts',
+        'windows.to_ts',
+        'meta_results.summary',
+        'meta_results.findings',
+        'meta_results.recommended_action',
+      );
+
+    if (options?.systemId) {
+      metaQuery = metaQuery.where('windows.system_id', options.systemId);
+    }
+    if (options?.from) {
+      metaQuery = metaQuery.where('windows.from_ts', '>=', options.from);
+    }
+    if (options?.to) {
+      metaQuery = metaQuery.where('windows.to_ts', '<=', options.to);
+    }
+
+    metaRows = await metaQuery;
+  }
 
   // For long time ranges with many windows, sample uniformly
   let sampledMetaRows = metaRows;
-  const targetSummaries = Math.min(metaLimit, 60); // Cap summaries in the prompt
+  const targetSummaries = 60; // Max summaries to include in the LLM prompt
   if (metaRows.length > targetSummaries) {
     // Use (length - 1) / (target - 1) to ensure both first and last rows are included
     const step = targetSummaries > 1 ? (metaRows.length - 1) / (targetSummaries - 1) : 1;
