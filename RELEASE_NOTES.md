@@ -1,3 +1,47 @@
+# LogSentinel AI v0.8.1-beta — Multi-Select Filters & Bug Fixes
+
+**Multi-select dropdown filters for event views, full-stack server-side filtering, and bug fixes.**
+
+---
+
+## What's New in v0.8.1
+
+### Multi-Select Dropdown Filters
+- **DrillDown view** — 5 multi-select filter dropdowns (Severity, Host, Program, Service, Facility) above the events table with a "Clear all" button.
+- **Event Explorer** — Single-select dropdowns replaced with MultiSelect components for Severity, Host, Source IP, and Program.
+- **New `MultiSelect` component** — Reusable dropdown with checkboxes, search, select-all/clear-all, click-outside-to-close.
+
+### Full-Stack Filter Support
+- Backend API (`/api/v1/systems/:id/events`) accepts comma-separated multi-value filter parameters.
+- PostgreSQL event source uses `WHERE IN (...)` for efficient multi-value filtering.
+- Elasticsearch event source uses `terms` queries for multi-value filtering.
+- Frontend API client sends filter arrays as comma-separated strings.
+
+### Bug Fixes
+- **EventExplorer click-to-filter** — Clicking a cell value now adds to the existing multi-selection instead of replacing it.
+- **DrillDown empty state** — Correctly distinguishes between "no events at all" vs "no events matching current filters."
+- **Finding lifecycle** — Severity-tiered auto-resolve, flapping detection, resolution evidence storage.
+- **Severity normalization** — Canonical mapping (ERR→error, CRIT→critical, etc.) during ingestion + data migration.
+- **"All time" RAG query** — Now covers 30 days of history instead of ~8 hours.
+- **SQL injection fix** — Parameterized query for historical meta summaries in RAG.
+- **TypeScript build fixes** — `ExtendedMetaContext` type for finding lifecycle pipeline.
+
+### Other
+- Event limit in DrillDown increased from 100 to 200.
+- Migration 022: finding lifecycle columns + severity normalization.
+
+## Upgrading from v0.8.0
+
+```bash
+cd LogSentinelAI
+git pull
+cd docker
+docker compose up -d --build
+# Migration 022 runs automatically on startup
+```
+
+---
+
 # LogSentinel AI v0.8.0-beta — Elasticsearch Integration
 
 **Hybrid event storage: read events directly from existing Elasticsearch clusters without duplicating data. Full UI management for ES connections, per-system event source selection, and ECS field flattening.**
