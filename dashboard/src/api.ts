@@ -466,14 +466,31 @@ export async function fetchDashboardSystems(): Promise<DashboardSystem[]> {
   return apiFetch('/api/v1/dashboard/systems');
 }
 
+export interface SystemEventsOpts {
+  from?: string;
+  to?: string;
+  limit?: number;
+  severity?: string[];
+  host?: string[];
+  program?: string[];
+  service?: string[];
+  facility?: string[];
+}
+
 export async function fetchSystemEvents(
   systemId: string,
-  opts?: { from?: string; to?: string; limit?: number },
+  opts?: SystemEventsOpts,
 ): Promise<LogEvent[]> {
   const params = new URLSearchParams();
   if (opts?.from) params.set('from', opts.from);
   if (opts?.to) params.set('to', opts.to);
   if (opts?.limit) params.set('limit', String(opts.limit));
+  // Multi-value filters sent as comma-separated strings
+  if (opts?.severity?.length) params.set('severity', opts.severity.join(','));
+  if (opts?.host?.length) params.set('host', opts.host.join(','));
+  if (opts?.program?.length) params.set('program', opts.program.join(','));
+  if (opts?.service?.length) params.set('service', opts.service.join(','));
+  if (opts?.facility?.length) params.set('facility', opts.facility.join(','));
   return apiFetch(`/api/v1/systems/${systemId}/events?${params}`);
 }
 

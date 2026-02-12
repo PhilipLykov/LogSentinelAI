@@ -5123,3 +5123,170 @@ tr.event-row-acked:hover {
   border-color: var(--accent, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
 }
+
+/* ── Multi-Select Component ───────────────────────────── */
+.ms-container {
+  position: relative;
+  display: inline-block;
+  min-width: 110px;
+}
+
+.ms-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #334155);
+  border-radius: 4px;
+  background: var(--background, #0f172a);
+  color: var(--foreground, #e2e8f0);
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s;
+}
+.ms-trigger:hover {
+  border-color: var(--accent, #3b82f6);
+}
+.ms-trigger.ms-active {
+  border-color: var(--accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.08);
+}
+.ms-trigger-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+.ms-trigger-arrow {
+  font-size: 0.65rem;
+  opacity: 0.6;
+}
+
+.ms-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 180px;
+  max-width: 280px;
+  background: var(--surface, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.ms-search-wrap {
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--border, #334155);
+}
+.ms-search {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #334155);
+  border-radius: 3px;
+  background: var(--background, #0f172a);
+  color: var(--foreground, #e2e8f0);
+  font-size: 0.82rem;
+}
+.ms-search:focus {
+  outline: none;
+  border-color: var(--accent, #3b82f6);
+}
+
+.ms-actions {
+  display: flex;
+  gap: 4px;
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid var(--border, #334155);
+}
+.ms-action-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border, #334155);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent, #3b82f6);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ms-action-btn:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.ms-options {
+  overflow-y: auto;
+  padding: 0.25rem 0;
+}
+.ms-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.1s;
+  color: var(--foreground, #e2e8f0);
+}
+.ms-option:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+.ms-option-checked {
+  background: rgba(59, 130, 246, 0.06);
+}
+.ms-option input[type="checkbox"] {
+  accent-color: var(--accent, #3b82f6);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+.ms-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ms-no-results {
+  padding: 0.5rem;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text-muted, #94a3b8);
+}
+
+/* ── Event Filters Bar ────────────────────────────────── */
+.event-filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  background: var(--surface, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 8px;
+}
+.event-filters-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted, #94a3b8);
+  align-self: center;
+  margin-right: 4px;
+}
+.event-filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.event-filter-item > label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.event-filters-clear {
+  align-self: center;
+  margin-left: auto;
+  font-size: 0.78rem;
+}

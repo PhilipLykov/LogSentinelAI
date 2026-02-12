@@ -10,6 +10,7 @@ import {
   unacknowledgeEvents,
 } from '../api';
 import { TracePanel } from './TracePanel';
+import { MultiSelect } from './MultiSelect';
 import { EuDateInput, euToIso, todayStartEu, todayEndEu, yearStartEu, nowEu } from './EuDateInput';
 
 interface Props {
@@ -101,10 +102,10 @@ export function EventExplorerView({ onAuthError }: Props) {
   const [query, setQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'fulltext' | 'contains'>('fulltext');
   const [systemFilter, setSystemFilter] = useState('');
-  const [severityFilter, setSeverityFilter] = useState('');
-  const [hostFilter, setHostFilter] = useState('');
-  const [sourceIpFilter, setSourceIpFilter] = useState('');
-  const [programFilter, setProgramFilter] = useState('');
+  const [severityFilter, setSeverityFilter] = useState<string[]>([]);
+  const [hostFilter, setHostFilter] = useState<string[]>([]);
+  const [sourceIpFilter, setSourceIpFilter] = useState<string[]>([]);
+  const [programFilter, setProgramFilter] = useState<string[]>([]);
   const [fromDate, setFromDate] = useState(todayStartEu());
   const [toDate, setToDate] = useState(todayEndEu());
   const [sortBy, setSortBy] = useState('timestamp');
@@ -195,10 +196,10 @@ export function EventExplorerView({ onAuthError }: Props) {
         params.q_mode = searchMode;
       }
       if (systemFilter) params.system_id = systemFilter;
-      if (severityFilter) params.severity = severityFilter;
-      if (hostFilter) params.host = hostFilter;
-      if (sourceIpFilter) params.source_ip = sourceIpFilter;
-      if (programFilter) params.program = programFilter;
+      if (severityFilter.length > 0) params.severity = severityFilter.join(',');
+      if (hostFilter.length > 0) params.host = hostFilter.join(',');
+      if (sourceIpFilter.length > 0) params.source_ip = sourceIpFilter.join(',');
+      if (programFilter.length > 0) params.program = programFilter.join(',');
       const isoFrom = euToIso(fromDate);
       const isoTo = euToIso(toDate);
       if (isoFrom) params.from = isoFrom;
@@ -277,10 +278,12 @@ export function EventExplorerView({ onAuthError }: Props) {
   };
 
   const handleClickFilter = (field: 'host' | 'source_ip' | 'program' | 'severity', value: string) => {
-    if (field === 'host') setHostFilter(value);
-    else if (field === 'source_ip') setSourceIpFilter(value);
-    else if (field === 'program') setProgramFilter(value);
-    else if (field === 'severity') setSeverityFilter(value);
+    const toggleIn = (prev: string[], v: string) =>
+      prev.includes(v) ? prev : [v];
+    if (field === 'host') setHostFilter((prev) => toggleIn(prev, value));
+    else if (field === 'source_ip') setSourceIpFilter((prev) => toggleIn(prev, value));
+    else if (field === 'program') setProgramFilter((prev) => toggleIn(prev, value));
+    else if (field === 'severity') setSeverityFilter((prev) => toggleIn(prev, value));
     setFiltersExpanded(true);
     setFilterTrigger((t) => t + 1);
   };
@@ -303,10 +306,10 @@ export function EventExplorerView({ onAuthError }: Props) {
   const clearFilters = () => {
     setQuery('');
     setSystemFilter('');
-    setSeverityFilter('');
-    setHostFilter('');
-    setSourceIpFilter('');
-    setProgramFilter('');
+    setSeverityFilter([]);
+    setHostFilter([]);
+    setSourceIpFilter([]);
+    setProgramFilter([]);
     setFromDate(todayStartEu());
     setToDate(todayEndEu());
     setSortBy('timestamp');
@@ -507,39 +510,39 @@ export function EventExplorerView({ onAuthError }: Props) {
           </div>
           <div className="ee-filter-group">
             <label>Severity</label>
-            <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
-              <option value="">All</option>
-              {facets?.severities.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
+            <MultiSelect
+              value={severityFilter}
+              options={facets?.severities ?? []}
+              onChange={setSeverityFilter}
+              placeholder="All"
+            />
           </div>
           <div className="ee-filter-group">
             <label>Host</label>
-            <select value={hostFilter} onChange={(e) => setHostFilter(e.target.value)}>
-              <option value="">All</option>
-              {facets?.hosts.map((h) => (
-                <option key={h} value={h}>{h}</option>
-              ))}
-            </select>
+            <MultiSelect
+              value={hostFilter}
+              options={facets?.hosts ?? []}
+              onChange={setHostFilter}
+              placeholder="All"
+            />
           </div>
           <div className="ee-filter-group">
             <label>Source IP</label>
-            <select value={sourceIpFilter} onChange={(e) => setSourceIpFilter(e.target.value)}>
-              <option value="">All</option>
-              {facets?.source_ips?.map((ip) => (
-                <option key={ip} value={ip}>{ip}</option>
-              ))}
-            </select>
+            <MultiSelect
+              value={sourceIpFilter}
+              options={facets?.source_ips ?? []}
+              onChange={setSourceIpFilter}
+              placeholder="All"
+            />
           </div>
           <div className="ee-filter-group">
             <label>Program</label>
-            <select value={programFilter} onChange={(e) => setProgramFilter(e.target.value)}>
-              <option value="">All</option>
-              {facets?.programs.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
+            <MultiSelect
+              value={programFilter}
+              options={facets?.programs ?? []}
+              onChange={setProgramFilter}
+              placeholder="All"
+            />
           </div>
           <div className="ee-filter-group">
             <label>From</label>

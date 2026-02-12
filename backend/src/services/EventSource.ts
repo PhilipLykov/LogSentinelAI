@@ -122,10 +122,19 @@ export interface EventSource {
     limit: number,
   ): Promise<TraceResult>;
 
-  /** Get events for a system (drill-down). */
+  /** Get events for a system (drill-down). Supports multi-value filters. */
   getSystemEvents(
     systemId: string,
-    opts: { from?: string; to?: string; limit: number },
+    opts: {
+      from?: string;
+      to?: string;
+      limit: number;
+      severity?: string[];
+      host?: string[];
+      program?: string[];
+      service?: string[];
+      facility?: string[];
+    },
   ): Promise<LogEvent[]>;
 
   /** Count events for a system in a time range (dashboard card). */

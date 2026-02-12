@@ -132,9 +132,30 @@ export class PgEventSource implements EventSource {
       }
     }
 
-    if (host) baseQuery.where('events.host', host);
-    if (source_ip) baseQuery.where('events.source_ip', source_ip);
-    if (program) baseQuery.where('events.program', program);
+    if (host) {
+      const hosts = host.split(',').map(h => h.trim()).filter(h => h.length > 0);
+      if (hosts.length === 1) {
+        baseQuery.where('events.host', hosts[0]);
+      } else if (hosts.length > 1) {
+        baseQuery.whereIn('events.host', hosts);
+      }
+    }
+    if (source_ip) {
+      const ips = source_ip.split(',').map(ip => ip.trim()).filter(ip => ip.length > 0);
+      if (ips.length === 1) {
+        baseQuery.where('events.source_ip', ips[0]);
+      } else if (ips.length > 1) {
+        baseQuery.whereIn('events.source_ip', ips);
+      }
+    }
+    if (program) {
+      const programs = program.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      if (programs.length === 1) {
+        baseQuery.where('events.program', programs[0]);
+      } else if (programs.length > 1) {
+        baseQuery.whereIn('events.program', programs);
+      }
+    }
     if (service) baseQuery.where('events.service', service);
     if (trace_id) baseQuery.where('events.trace_id', trace_id);
     if (from && !isNaN(Date.parse(from))) baseQuery.where('events.timestamp', '>=', from);
@@ -236,7 +257,16 @@ export class PgEventSource implements EventSource {
 
   async getSystemEvents(
     systemId: string,
-    opts: { from?: string; to?: string; limit: number },
+    opts: {
+      from?: string;
+      to?: string;
+      limit: number;
+      severity?: string[];
+      host?: string[];
+      program?: string[];
+      service?: string[];
+      facility?: string[];
+    },
   ): Promise<LogEvent[]> {
     let query = this.db('events')
       .where({ system_id: systemId })
@@ -245,6 +275,13 @@ export class PgEventSource implements EventSource {
 
     if (opts.from) query = query.where('timestamp', '>=', opts.from);
     if (opts.to) query = query.where('timestamp', '<=', opts.to);
+
+    // Multi-value filters — WHERE column IN (...)
+    if (opts.severity?.length) query = query.whereIn('severity', opts.severity);
+    if (opts.host?.length) query = query.whereIn('host', opts.host);
+    if (opts.program?.length) query = query.whereIn('program', opts.program);
+    if (opts.service?.length) query = query.whereIn('service', opts.service);
+    if (opts.facility?.length) query = query.whereIn('facility', opts.facility);
 
     const rows = await query.select('*');
     return rows.map(normaliseRow);

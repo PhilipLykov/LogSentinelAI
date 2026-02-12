@@ -346,7 +346,16 @@ export class EsEventSource implements EventSource {
 
   async getSystemEvents(
     systemId: string,
-    opts: { from?: string; to?: string; limit: number },
+    opts: {
+      from?: string;
+      to?: string;
+      limit: number;
+      severity?: string[];
+      host?: string[];
+      program?: string[];
+      service?: string[];
+      facility?: string[];
+    },
   ): Promise<LogEvent[]> {
     const client = await this.getClient();
     const base = this.baseQuery();
@@ -360,6 +369,13 @@ export class EsEventSource implements EventSource {
       if (opts.to) range.lte = opts.to;
       filter.push({ range: { [tsField]: range } });
     }
+
+    // Multi-value filters — ES terms query
+    if (opts.severity?.length) filter.push({ terms: { [this.esField('severity')]: opts.severity } });
+    if (opts.host?.length) filter.push({ terms: { [this.esField('host')]: opts.host } });
+    if (opts.program?.length) filter.push({ terms: { [this.esField('program')]: opts.program } });
+    if (opts.service?.length) filter.push({ terms: { [this.esField('service')]: opts.service } });
+    if (opts.facility?.length) filter.push({ terms: { [this.esField('facility')]: opts.facility } });
 
     const query = filter.length > 0 ? { bool: { filter } } : { match_all: {} };
 

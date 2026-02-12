@@ -16,6 +16,7 @@ import {
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
+import { MultiSelect } from './MultiSelect';
 import { hasPermission } from '../App';
 
 /** Auto-refresh interval for findings (ms). */
@@ -49,6 +50,18 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
   const [findingsTab, setFindingsTab] = useState<'open' | 'acknowledged' | 'resolved'>('open');
   const [ackingId, setAckingId] = useState<string | null>(null);
 
+  // ── Event filter state (multi-select) ───────────────────
+  const [filterSeverity, setFilterSeverity] = useState<string[]>([]);
+  const [filterHost, setFilterHost] = useState<string[]>([]);
+  const [filterProgram, setFilterProgram] = useState<string[]>([]);
+  const [filterService, setFilterService] = useState<string[]>([]);
+  const [filterFacility, setFilterFacility] = useState<string[]>([]);
+
+  // Track all unique values seen (accumulated across loads to keep options stable)
+  const [filterOptions, setFilterOptions] = useState<{
+    severity: string[]; host: string[]; program: string[]; service: string[]; facility: string[];
+  }>({ severity: [], host: [], program: [], service: [], facility: [] });
+
   // Stable reference for auth error handler
   const onAuthErrorRef = useRef(onAuthError);
   onAuthErrorRef.current = onAuthError;
@@ -59,12 +72,35 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
     setError('');
 
     Promise.all([
-      fetchSystemEvents(system.id, { limit: 100 }),
+      fetchSystemEvents(system.id, {
+        limit: 200,
+        severity: filterSeverity.length > 0 ? filterSeverity : undefined,
+        host: filterHost.length > 0 ? filterHost : undefined,
+        program: filterProgram.length > 0 ? filterProgram : undefined,
+        service: filterService.length > 0 ? filterService : undefined,
+        facility: filterFacility.length > 0 ? filterFacility : undefined,
+      }),
       fetchSystemMeta(system.id).catch(() => null),
     ])
       .then(([evts, m]) => {
         setEvents(evts);
         setMeta(m);
+
+        // Accumulate unique filter option values (merge with existing to keep options stable)
+        setFilterOptions((prev) => {
+          const merge = (existing: string[], newVals: (string | null | undefined)[]) => {
+            const set = new Set(existing);
+            for (const v of newVals) { if (v) set.add(v); }
+            return Array.from(set).sort();
+          };
+          return {
+            severity: merge(prev.severity, evts.map((e) => e.severity)),
+            host: merge(prev.host, evts.map((e) => e.host)),
+            program: merge(prev.program, evts.map((e) => e.program)),
+            service: merge(prev.service, evts.map((e) => e.service)),
+            facility: merge(prev.facility, evts.map((e) => e.facility)),
+          };
+        });
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -75,7 +111,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
         setError(msg);
       })
       .finally(() => setLoading(false));
-  }, [system.id]);
+  }, [system.id, filterSeverity, filterHost, filterProgram, filterService, filterFacility]);
 
   // ── Load findings ───────────────────────────────────────
   const loadFindings = useCallback(async () => {
@@ -99,6 +135,30 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
     loadData();
     loadFindings();
   }, [loadData, loadFindings]);
+
+  // ── Seed filter options from an unfiltered fetch (runs once) ──
+  const filterSeeded = useRef(false);
+  useEffect(() => {
+    if (filterSeeded.current) return;
+    filterSeeded.current = true;
+    fetchSystemEvents(system.id, { limit: 200 }).then((evts) => {
+      setFilterOptions((prev) => {
+        const merge = (existing: string[], newVals: (string | null | undefined)[]) => {
+          const set = new Set(existing);
+          for (const v of newVals) { if (v) set.add(v); }
+          return Array.from(set).sort();
+        };
+        return {
+          severity: merge(prev.severity, evts.map((e) => e.severity)),
+          host: merge(prev.host, evts.map((e) => e.host)),
+          program: merge(prev.program, evts.map((e) => e.program)),
+          service: merge(prev.service, evts.map((e) => e.service)),
+          facility: merge(prev.facility, evts.map((e) => e.facility)),
+        };
+      });
+    }).catch(() => { /* ignore — main loadData will show error */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [system.id]);
 
   // ── Auto-refresh findings ───────────────────────────────
   useEffect(() => {
@@ -659,13 +719,80 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
         </div>
       )}
 
+      {/* ── Event filters ─────────────────────────────────── */}
+      {(events.length > 0 || filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0) && (
+        <div className="event-filters-bar">
+          <span className="event-filters-label">Filters:</span>
+          <div className="event-filter-item">
+            <label>Severity</label>
+            <MultiSelect
+              value={filterSeverity}
+              options={filterOptions.severity}
+              onChange={setFilterSeverity}
+              placeholder="All"
+            />
+          </div>
+          <div className="event-filter-item">
+            <label>Host</label>
+            <MultiSelect
+              value={filterHost}
+              options={filterOptions.host}
+              onChange={setFilterHost}
+              placeholder="All"
+            />
+          </div>
+          <div className="event-filter-item">
+            <label>Program</label>
+            <MultiSelect
+              value={filterProgram}
+              options={filterOptions.program}
+              onChange={setFilterProgram}
+              placeholder="All"
+            />
+          </div>
+          <div className="event-filter-item">
+            <label>Service</label>
+            <MultiSelect
+              value={filterService}
+              options={filterOptions.service}
+              onChange={setFilterService}
+              placeholder="All"
+            />
+          </div>
+          <div className="event-filter-item">
+            <label>Facility</label>
+            <MultiSelect
+              value={filterFacility}
+              options={filterOptions.facility}
+              onChange={setFilterFacility}
+              placeholder="All"
+            />
+          </div>
+          {(filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0) && (
+            <button
+              type="button"
+              className="btn btn-sm btn-outline event-filters-clear"
+              onClick={() => {
+                setFilterSeverity([]);
+                setFilterHost([]);
+                setFilterProgram([]);
+                setFilterService([]);
+                setFilterFacility([]);
+              }}
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Events table */}
       {events.length > 0 && (
         <div className="table-responsive">
           <table className="events-table" aria-label={`Recent events for ${system.name}`}>
             <caption className="sr-only">
               Showing {events.length} most recent events for {system.name}
-              {events.length >= 100 && ' (limited to 100)'}
+              {events.length >= 200 && ' (limited to 200)'}
             </caption>
             <thead>
               <tr>
@@ -769,9 +896,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
             </tbody>
           </table>
 
-          {events.length >= 100 && (
+          {events.length >= 200 && (
             <p className="truncation-notice">
-              Showing the latest 100 events. Use the API for full access.
+              Showing the latest 200 events. Use the API for full access.
             </p>
           )}
         </div>

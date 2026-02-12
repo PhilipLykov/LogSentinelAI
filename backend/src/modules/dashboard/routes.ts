@@ -90,7 +90,14 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   );
 
   // ── Drill-down: events for a system ────────────────────────
-  app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string; limit?: string } }>(
+  app.get<{
+    Params: { id: string };
+    Querystring: {
+      from?: string; to?: string; limit?: string;
+      severity?: string; host?: string; program?: string;
+      service?: string; facility?: string;
+    };
+  }>(
     '/api/v1/systems/:id/events',
     { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
@@ -99,10 +106,24 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const rawLimit = Number(request.query.limit ?? 100);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 500) : 100;
 
+      // Parse comma-separated multi-value filter params into arrays
+      const parseFilter = (val?: string): string[] | undefined => {
+        if (!val) return undefined;
+        const items = val.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+        return items.length > 0 ? items : undefined;
+      };
+
       // Load system to determine event source
       const system = await db('monitored_systems').where({ id }).first();
       const sysEventSource = system ? getEventSource(system, db) : eventSource;
-      const events = await sysEventSource.getSystemEvents(id, { from, to, limit });
+      const events = await sysEventSource.getSystemEvents(id, {
+        from, to, limit,
+        severity: parseFilter(request.query.severity),
+        host: parseFilter(request.query.host),
+        program: parseFilter(request.query.program),
+        service: parseFilter(request.query.service),
+        facility: parseFilter(request.query.facility),
+      });
       return reply.send(events);
     },
   );
