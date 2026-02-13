@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -6,6 +7,9 @@ import { CRITERIA } from '../../types/index.js';
 import { localTimestamp } from '../../config/index.js';
 import { writeAuditLog } from '../../middleware/audit.js';
 import { getEventSource, getDefaultEventSource } from '../../services/eventSourceFactory.js';
+import { OpenAiAdapter } from '../llm/adapter.js';
+import { resolveAiConfig } from '../llm/aiConfig.js';
+import { metaAnalyzeWindow } from '../pipeline/metaAnalyze.js';
 
 /**
  * Dashboard-oriented API routes: system overview, drill-down, SSE stream.
@@ -417,6 +421,98 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       request.raw.on('close', () => {
         intervalCleared = true;
         clearInterval(interval);
+      });
+    },
+  );
+
+  // ── Re-evaluate meta-analysis for a system ─────────────────
+  // Creates a fresh 2-hour window and runs a full meta-analysis (LLM call).
+  // Normal-behavior events are automatically excluded by metaAnalyzeWindow.
+  app.post<{ Params: { systemId: string } }>(
+    '/api/v1/systems/:systemId/re-evaluate',
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
+    async (request, reply) => {
+      const { systemId } = request.params;
+
+      const system = await db('monitored_systems').where({ id: systemId }).first();
+      if (!system) return reply.code(404).send({ error: 'System not found' });
+
+      // Resolve AI config and verify it's usable
+      const aiCfg = await resolveAiConfig(db);
+      if (!aiCfg.apiKey) {
+        return reply.code(400).send({ error: 'AI is not configured — set an API key in Settings.' });
+      }
+
+      const llm = new OpenAiAdapter();
+      llm.updateConfig({ apiKey: aiCfg.apiKey, model: aiCfg.model, baseUrl: aiCfg.baseUrl });
+
+      // Create a window covering the last 2 hours (matches dashboard's current-score range)
+      const to_ts = new Date().toISOString();
+      const from_ts = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+      const sysEventSource = getEventSource(system, db);
+      const eventCount = await sysEventSource.countEventsInTimeRange(systemId, from_ts, to_ts);
+      if (eventCount === 0) {
+        return reply.code(200).send({
+          message: 'No events in the last 2 hours to analyze.',
+          window_id: null,
+          event_count: 0,
+        });
+      }
+
+      const windowId = uuidv4();
+      await db('windows').insert({
+        id: windowId,
+        system_id: systemId,
+        from_ts,
+        to_ts,
+        trigger: 'manual',
+      });
+
+      console.log(
+        `[${localTimestamp()}] Re-evaluate triggered for system "${system.name}" (${systemId}), window ${windowId} [${from_ts} — ${to_ts}], ${eventCount} events`,
+      );
+
+      try {
+        await metaAnalyzeWindow(db, llm, windowId);
+      } catch (err) {
+        console.error(
+          `[${localTimestamp()}] Re-evaluate meta-analysis failed for window ${windowId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return reply.code(500).send({
+          error: 'Meta-analysis failed. Check AI configuration and try again.',
+        });
+      }
+
+      // Fetch the new effective scores to return to the caller
+      const newScores: Record<string, { effective: number; meta: number; max_event: number }> = {};
+      const effRows = await db('effective_scores').where({ window_id: windowId, system_id: systemId });
+      for (const row of effRows) {
+        const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
+        if (criterion) {
+          newScores[criterion.slug] = {
+            effective: Number(row.effective_value) || 0,
+            meta: Number(row.meta_score) || 0,
+            max_event: Number(row.max_event_score) || 0,
+          };
+        }
+      }
+
+      await writeAuditLog(db, {
+        action: 'system_re_evaluate',
+        resource_type: 'monitored_system',
+        resource_id: systemId,
+        details: { window_id: windowId, event_count: eventCount },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
+      return reply.send({
+        message: `Meta-analysis completed for ${eventCount} events.`,
+        window_id: windowId,
+        event_count: eventCount,
+        scores: newScores,
       });
     },
   );

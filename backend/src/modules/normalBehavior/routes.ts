@@ -89,12 +89,21 @@ async function retroactivelyApplyTemplate(
         .first();
 
       const newMaxEvent = Number(maxRow?.max_score ?? 0);
-      const metaScore = Number(existing.meta_score) || 0;
+      let metaScore = Number(existing.meta_score) || 0;
+
+      // If ALL events in this window now have score 0 for this criterion,
+      // the meta-analysis conclusion (based on those same events) is no longer
+      // valid. Zero the meta_score so the effective score drops to 0 as well.
+      if (newMaxEvent === 0) {
+        metaScore = 0;
+      }
+
       const newEffective = DEFAULT_W_META * metaScore + (1 - DEFAULT_W_META) * newMaxEvent;
 
       await db('effective_scores')
         .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
         .update({
+          meta_score: metaScore,
           max_event_score: newMaxEvent,
           effective_value: newEffective,
           updated_at: new Date().toISOString(),

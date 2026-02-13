@@ -90,14 +90,6 @@ export function ScoreBars({ scores, onCriterionClick, selectedCriterion }: Score
             <span className="score-value" style={{ color: scoreColor(value) }} aria-hidden="true">
               {pct}
             </span>
-            {info?.peak_24h != null && info.peak_24h > value && (
-              <span
-                className="score-peak-24h"
-                title={`24h peak: ${Math.round(info.peak_24h * 100)}% (current shows last 2 hours)`}
-              >
-                (peak {Math.round(info.peak_24h * 100)})
-              </span>
-            )}
           </div>
         );
       })}

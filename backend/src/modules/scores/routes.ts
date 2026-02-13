@@ -267,7 +267,10 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         );
       }
 
-      // PG-backed system: group by template_id (or by event_id for singleton events)
+      // PG-backed system: group by template_id (or by event_id for singleton events).
+      // Score, severity_label, reason_codes are NOT in GROUP BY — they use aggregates
+      // so that all events of the same template are combined into one group regardless
+      // of minor score variations across scoring runs.
       const groupQuery = db('event_scores')
         .joinRaw('JOIN events ON event_scores.event_id = events.id::text')
         .join('criteria', 'event_scores.criterion_id', 'criteria.id')
@@ -279,12 +282,9 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
           events.severity,
           events.program,
           criteria.slug,
-          criteria.name,
-          event_scores.score,
-          event_scores.severity_label,
-          event_scores.reason_codes
+          criteria.name
         `)
-        .orderBy('event_scores.score', 'desc')
+        .orderByRaw('MAX(event_scores.score) DESC')
         .limit(limit)
         .select(
           db.raw(`COALESCE(events.template_id::text, events.id::text) as group_key`),
@@ -293,9 +293,9 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
           'events.program',
           'criteria.slug as criterion_slug',
           'criteria.name as criterion_name',
-          'event_scores.score',
-          'event_scores.severity_label',
-          'event_scores.reason_codes',
+          db.raw('MAX(event_scores.score) as score'),
+          db.raw(`(ARRAY_AGG(event_scores.severity_label ORDER BY event_scores.score DESC))[1] as severity_label`),
+          db.raw(`(ARRAY_AGG(event_scores.reason_codes ORDER BY event_scores.score DESC))[1] as reason_codes`),
           db.raw('COUNT(*)::int as occurrence_count'),
           db.raw('MIN(events.timestamp) as first_seen'),
           db.raw('MAX(events.timestamp) as last_seen'),
@@ -307,7 +307,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         groupQuery.where('event_scores.criterion_id', Number(criterionId));
       }
       if (minScore > 0) {
-        groupQuery.where('event_scores.score', '>=', minScore);
+        groupQuery.havingRaw('MAX(event_scores.score) >= ?', [minScore]);
       }
 
       const rows = await groupQuery;

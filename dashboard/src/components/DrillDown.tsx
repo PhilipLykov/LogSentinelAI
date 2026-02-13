@@ -18,6 +18,7 @@ import {
   previewNormalBehavior,
   createNormalBehaviorTemplate,
   fetchNormalBehaviorTemplates,
+  reEvaluateSystem,
   type NormalBehaviorTemplate,
   type NormalBehaviorPreview,
 } from '../api';
@@ -74,6 +75,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   const [markOkLoading, setMarkOkLoading] = useState(false);
   const [markOkError, setMarkOkError] = useState('');
   const [markOkSuccess, setMarkOkSuccess] = useState('');
+
+  // ── Re-evaluate meta-analysis state ─────────────────────
+  const [reEvalLoading, setReEvalLoading] = useState(false);
+  const [reEvalMsg, setReEvalMsg] = useState('');
 
   // ── Normal behavior templates (for hiding "Mark OK" on already-matched events) ──
   const [normalTemplates, setNormalTemplates] = useState<NormalBehaviorTemplate[]>([]);
@@ -311,7 +316,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     try {
       const data = await fetchGroupedEventScores(system.id, {
         criterion_id: criterion.id,
-        limit: 30,
+        limit: 50,
         min_score: 0.001,
       });
       setCriterionGroups(data);
@@ -504,7 +509,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
           try {
             const data = await fetchGroupedEventScores(system.id, {
               criterion_id: criterion.id,
-              limit: 30,
+              limit: 50,
               min_score: 0.001,
             });
             setCriterionGroups(data);
@@ -524,6 +529,49 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       setMarkOkLoading(false);
     }
   }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates]);
+
+  // ── Re-evaluate meta-analysis handler ───────────────────
+  const handleReEvaluate = useCallback(async () => {
+    if (reEvalLoading) return;
+    if (!window.confirm(
+      'Re-evaluate meta-analysis for this system?\n\nThis will run a fresh AI analysis on recent events (excluding normal-behavior events). It may take 10-30 seconds.',
+    )) return;
+
+    setReEvalLoading(true);
+    setReEvalMsg('');
+    try {
+      const res = await reEvaluateSystem(system.id);
+      setReEvalMsg(res.message);
+      setTimeout(() => setReEvalMsg(''), 5000);
+
+      // Refresh criterion drill-down if open
+      if (selectedCriterion) {
+        const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
+        if (criterion) {
+          try {
+            const data = await fetchGroupedEventScores(system.id, {
+              criterion_id: criterion.id,
+              limit: 50,
+              min_score: 0.001,
+            });
+            setCriterionGroups(data);
+            setExpandedGroup(null);
+            setExpandedGroupEvents([]);
+          } catch { /* ignore */ }
+        }
+      }
+
+      // Refresh parent dashboard scores
+      onRefreshSystem?.();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      setReEvalMsg(`Error: ${msg}`);
+      setTimeout(() => setReEvalMsg(''), 6000);
+    } finally {
+      setReEvalLoading(false);
+    }
+  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem]);
 
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');
@@ -645,13 +693,30 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               <h4>
                 Events scored for: <span className="criterion-drilldown-name">{criterionLabel}</span>
               </h4>
-              <button
-                className="btn btn-xs btn-outline"
-                onClick={() => { setSelectedCriterion(null); setCriterionGroups([]); setExpandedGroup(null); setExpandedGroupEvents([]); }}
-              >
-                Close
-              </button>
+              <div className="criterion-drilldown-actions">
+                {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+                  <button
+                    className="btn btn-xs btn-primary"
+                    onClick={handleReEvaluate}
+                    disabled={reEvalLoading}
+                    title="Re-run AI meta-analysis on recent events (excludes events marked as normal behavior)"
+                  >
+                    {reEvalLoading ? 'Analyzing…' : 'Re-evaluate'}
+                  </button>
+                )}
+                <button
+                  className="btn btn-xs btn-outline"
+                  onClick={() => { setSelectedCriterion(null); setCriterionGroups([]); setExpandedGroup(null); setExpandedGroupEvents([]); }}
+                >
+                  Close
+                </button>
+              </div>
             </div>
+            {reEvalMsg && (
+              <div className={`reeval-msg${reEvalMsg.startsWith('Error') ? ' reeval-error' : ''}`}>
+                {reEvalMsg}
+              </div>
+            )}
 
             {/* Score breakdown: meta vs event components */}
             {scoreInfo && effectivePct > 0 && (

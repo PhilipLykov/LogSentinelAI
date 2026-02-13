@@ -482,6 +482,17 @@ export async function fetchDashboardSystems(): Promise<DashboardSystem[]> {
   return apiFetch('/api/v1/dashboard/systems');
 }
 
+export interface ReEvaluateResponse {
+  message: string;
+  window_id: string | null;
+  event_count: number;
+  scores?: Record<string, { effective: number; meta: number; max_event: number }>;
+}
+
+export async function reEvaluateSystem(systemId: string): Promise<ReEvaluateResponse> {
+  return apiFetch(`/api/v1/systems/${systemId}/re-evaluate`, { method: 'POST' });
+}
+
 export interface SystemEventsOpts {
   from?: string;
   to?: string;

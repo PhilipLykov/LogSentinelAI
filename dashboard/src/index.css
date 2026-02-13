@@ -331,14 +331,6 @@ input:focus-visible,
   font-variant-numeric: tabular-nums;
 }
 
-.score-peak-24h {
-  font-size: 0.7rem;
-  color: var(--muted);
-  font-weight: 400;
-  margin-left: 4px;
-  white-space: nowrap;
-}
-
 /* ── Active Issues Banner ───────────────────────────────── */
 
 .active-issues-banner {
@@ -519,6 +511,25 @@ input:focus-visible,
   margin: 0;
   font-size: 1rem;
   color: var(--text);
+}
+
+.criterion-drilldown-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reeval-msg {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: rgba(76, 175, 80, 0.12);
+  color: var(--green, #4caf50);
+  margin-bottom: 12px;
+}
+.reeval-error {
+  background: rgba(239, 83, 80, 0.12);
+  color: var(--red, #ef5350);
 }
 
 .criterion-drilldown-name {
