@@ -567,6 +567,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         if (freshMeta) setMeta(freshMeta);
       } catch { /* ignore */ }
 
+      // Refresh findings (re-evaluate may auto-resolve findings matching normal behavior)
+      loadFindings();
+
       // Refresh parent dashboard scores
       onRefreshSystem?.();
     } catch (err: unknown) {
@@ -577,7 +580,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setReEvalLoading(false);
     }
-  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem]);
+  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem, loadFindings]);
 
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');

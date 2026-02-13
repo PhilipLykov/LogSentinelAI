@@ -43,6 +43,12 @@ export interface MetaAnalysisContext {
     /** Whether the finding was historically oscillating (legacy, no longer used). */
     is_flapping?: boolean;
   }>;
+  /**
+   * Event patterns the operator has marked as "normal behavior".
+   * The LLM should treat these as routine/expected and exclude them from
+   * summaries, findings, and recommendations.
+   */
+  normalBehaviorPatterns?: string[];
 }
 
 /** Structured resolution entry returned by the LLM. */
@@ -513,6 +519,18 @@ export class OpenAiAdapter implements LlmAdapter {
       sections.push('=== Previous analysis context (most recent first) ===');
       for (const ps of context.previousSummaries) {
         sections.push(`[${ps.windowTime}] ${ps.summary}`);
+      }
+    }
+
+    // ── Normal behavior patterns (operator-marked, must be excluded) ──
+    if (context?.normalBehaviorPatterns?.length) {
+      sections.push('');
+      sections.push('=== NORMAL BEHAVIOR (operator-verified, DO NOT report) ===');
+      sections.push('The following event patterns have been explicitly marked as normal/expected by the operator.');
+      sections.push('Do NOT mention them in the summary, do NOT create findings for them, and do NOT include them in recommendations.');
+      sections.push('If previous summaries or open findings reference these patterns, disregard those references.');
+      for (const pattern of context.normalBehaviorPatterns) {
+        sections.push(`  • ${pattern}`);
       }
     }
 

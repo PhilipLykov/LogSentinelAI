@@ -18,7 +18,7 @@ import {
 } from './findingDedup.js';
 import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivacyFilter.js';
 import { getEventSource } from '../../services/eventSourceFactory.js';
-import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents } from './normalBehavior.js';
+import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents, matchesNormalBehavior } from './normalBehavior.js';
 
 const DEFAULT_W_META = 0.7;
 /** Default number of previous window summaries to include as context. */
@@ -323,6 +323,51 @@ export async function metaAnalyzeWindow(
   // ── Build historical context (sliding window) ───────────
   const contextWindowSize = metaCfg.context_window_size ?? DEFAULT_CONTEXT_WINDOW_SIZE;
   const context = await buildMetaContext(db, system.id, windowId, contextWindowSize);
+
+  // ── Normal-behavior awareness for LLM context ─────────
+  // 1. Auto-resolve open findings whose text matches a normal-behavior template.
+  //    The operator explicitly said these events are routine, so findings about
+  //    them should not remain open.
+  // 2. Remove those findings from the LLM context so the summary is clean.
+  // 3. Pass the normal-behavior patterns to the LLM so it ignores old
+  //    summaries that reference them.
+  if (normalTemplates.length > 0) {
+    const findingsToAutoResolve: string[] = []; // DB IDs
+    context.openFindings = context.openFindings.filter((f) => {
+      // Finding text is an LLM-generated summary, not a raw event message,
+      // so regex matching won't work. Use keyword overlap instead:
+      // if >50% of a template's significant words appear in the finding,
+      // the finding is about a normal-behavior event type.
+      const findingMatch = matchesNormalBehavior(f.text, normalTemplates, system.id)
+        || findingMatchesNormalBehaviorFuzzy(f.text, normalTemplates, system.id);
+      if (findingMatch) {
+        findingsToAutoResolve.push((f as any)._dbId);
+        return false; // remove from LLM context
+      }
+      return true;
+    });
+
+    // Persist auto-resolution in DB
+    if (findingsToAutoResolve.length > 0) {
+      const nowIso = new Date().toISOString();
+      await db('findings')
+        .whereIn('id', findingsToAutoResolve)
+        .update({
+          status: 'resolved',
+          resolved_at: nowIso,
+          resolution_evidence: JSON.stringify({
+            reason: 'Event type marked as normal behavior by operator',
+            auto_resolved: true,
+          }),
+        });
+      console.log(
+        `[${localTimestamp()}] Meta-analyze: auto-resolved ${findingsToAutoResolve.length} finding(s) matching normal-behavior templates (window=${windowId})`,
+      );
+    }
+
+    // Provide patterns to LLM so it can disregard old summary references
+    context.normalBehaviorPatterns = normalTemplates.map((t) => t.pattern);
+  }
 
   // ── Call LLM for meta-analysis ──────────────────────────
   let result: Awaited<ReturnType<typeof llm.metaAnalyze>>['result'];
@@ -902,4 +947,72 @@ function formatShort(ts: string): string {
   } catch {
     return ts;
   }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Fuzzy matching: finding text ↔ normal-behavior template
+//
+// Finding text is an LLM-generated summary (e.g., "Switch 2's power
+// stack has lost redundancy...") which may differ from the raw event
+// message the template pattern was built from. Regex matching alone
+// fails here, so we use keyword overlap.
+// ────────────────────────────────────────────────────────────────
+
+/** Words too short or too common to be meaningful for matching. */
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'has', 'had', 'have',
+  'be', 'been', 'being', 'do', 'does', 'did', 'will', 'would', 'shall',
+  'should', 'may', 'might', 'can', 'could', 'to', 'of', 'in', 'for',
+  'on', 'with', 'at', 'by', 'from', 'as', 'into', 'about', 'its',
+  'and', 'or', 'but', 'not', 'no', 'this', 'that', 'it', 'now',
+]);
+
+/** Extract significant words from text (lowercase, no punctuation, no stop words, min 3 chars). */
+function significantWords(text: string): Set<string> {
+  const words = text.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/);
+  const result = new Set<string>();
+  for (const w of words) {
+    if (w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w)) {
+      result.add(w);
+    }
+  }
+  return result;
+}
+
+/**
+ * Fuzzy check: does a finding's text match any normal-behavior template
+ * based on keyword overlap?
+ *
+ * A template pattern like `* power stack lost redundancy and is now operating *`
+ * has significant words: {power, stack, lost, redundancy, operating}.
+ * If ≥50% of those words appear in the finding text, we consider it a match.
+ */
+function findingMatchesNormalBehaviorFuzzy(
+  findingText: string,
+  templates: Array<{ pattern: string; system_id: string | null }>,
+  systemId?: string,
+): boolean {
+  const findingWords = significantWords(findingText);
+  if (findingWords.size === 0) return false;
+
+  for (const t of templates) {
+    // System-scoping: same logic as matchesNormalBehavior
+    if (t.system_id && t.system_id !== systemId) continue;
+
+    // Extract significant words from the pattern (replace * with space first)
+    const patternClean = t.pattern.replace(/\*/g, ' ');
+    const patternWords = significantWords(patternClean);
+    if (patternWords.size < 2) continue; // too few words to match meaningfully
+
+    // Count how many of the template's keywords appear in the finding
+    let overlap = 0;
+    for (const w of patternWords) {
+      if (findingWords.has(w)) overlap++;
+    }
+
+    const ratio = overlap / patternWords.size;
+    if (ratio >= 0.5) return true;
+  }
+
+  return false;
 }
