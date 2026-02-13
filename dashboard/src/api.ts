@@ -1634,3 +1634,73 @@ export function createScoreStream(onMessage: (data: unknown) => void): EventSour
   };
   return es;
 }
+
+// ── Normal Behavior Templates ──────────────────────────────────
+
+export interface NormalBehaviorTemplate {
+  id: string;
+  system_id: string | null;
+  pattern: string;
+  pattern_regex: string;
+  original_message: string;
+  original_event_id: string | null;
+  created_by: string;
+  created_at: string;
+  enabled: boolean;
+  notes: string | null;
+}
+
+export interface NormalBehaviorPreview {
+  original_message: string;
+  suggested_pattern: string;
+}
+
+export async function previewNormalBehavior(
+  params: { event_id?: string; message?: string },
+): Promise<NormalBehaviorPreview> {
+  return apiFetch('/api/v1/normal-behavior-templates/preview', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function createNormalBehaviorTemplate(
+  params: {
+    event_id?: string;
+    system_id?: string | null;
+    pattern?: string;
+    message?: string;
+    notes?: string;
+  },
+): Promise<NormalBehaviorTemplate> {
+  return apiFetch('/api/v1/normal-behavior-templates', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function fetchNormalBehaviorTemplates(
+  opts?: { system_id?: string; enabled?: string },
+): Promise<NormalBehaviorTemplate[]> {
+  const params = new URLSearchParams();
+  if (opts?.system_id) params.set('system_id', opts.system_id);
+  if (opts?.enabled) params.set('enabled', opts.enabled);
+  const qs = params.toString();
+  return apiFetch(`/api/v1/normal-behavior-templates${qs ? '?' + qs : ''}`);
+}
+
+export async function updateNormalBehaviorTemplate(
+  id: string,
+  updates: { pattern?: string; enabled?: boolean; notes?: string; system_id?: string | null },
+): Promise<NormalBehaviorTemplate> {
+  return apiFetch(`/api/v1/normal-behavior-templates/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteNormalBehaviorTemplate(id: string): Promise<void> {
+  await apiFetch(`/api/v1/normal-behavior-templates/${id}`, {
+    method: 'DELETE',
+  });
+}

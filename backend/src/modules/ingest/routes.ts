@@ -4,7 +4,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
-import { normalizeEntry, computeNormalizedHash, flattenECS } from './normalize.js';
+import { normalizeEntry, computeNormalizedHash, flattenECS, cleanTransportAddress } from './normalize.js';
 import { redactEvent } from './redact.js';
 import { matchSource } from './sourceMatch.js';
 import type { IngestEntry, IngestResponse } from '../../types/index.js';
@@ -96,6 +96,20 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           rejected++;
           errors.push(`Entry ${i}: missing or empty "message" field.`);
           continue;
+        }
+
+        // 1b. Failsafe: if the event payload has no source_ip, fall back to the
+        //     HTTP client's IP address. This ensures source_ip is always populated
+        //     even when the log shipper (e.g. Fluent Bit) does not include it.
+        //     rsyslogd typically sends fromhost-ip; Fluent Bit may not unless
+        //     source_address_key is configured.
+        if (!normalized.source_ip && request.ip) {
+          normalized.source_ip = cleanTransportAddress(request.ip) ?? request.ip;
+        }
+        // Also back-fill host if it was left empty (normalizer falls back host→source_ip,
+        // but that runs before this fallback).
+        if (!normalized.host && normalized.source_ip) {
+          normalized.host = normalized.source_ip;
         }
 
         // 2. Source match

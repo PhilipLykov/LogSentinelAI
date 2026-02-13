@@ -18,6 +18,7 @@ import {
 } from './findingDedup.js';
 import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivacyFilter.js';
 import { getEventSource } from '../../services/eventSourceFactory.js';
+import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents } from './normalBehavior.js';
 
 const DEFAULT_W_META = 0.7;
 /** Default number of previous window summaries to include as context. */
@@ -169,7 +170,7 @@ export async function metaAnalyzeWindow(
 
   // ── Gather events in window — via EventSource abstraction (system-aware) ──
   const eventSource = getEventSource(system, db);
-  const events = await eventSource.getEventsInTimeRange(
+  let events = await eventSource.getEventsInTimeRange(
     system.id,
     window.from_ts,
     window.to_ts,
@@ -178,6 +179,18 @@ export async function metaAnalyzeWindow(
       excludeAcknowledged: ackMode === 'skip',
     },
   );
+
+  // ── Exclude normal-behavior events ────────────────────────
+  const normalTemplates = await loadNormalBehaviorTemplates(db, system.id);
+  if (normalTemplates.length > 0) {
+    const { filtered, excludedCount } = filterNormalBehaviorEvents(events, normalTemplates);
+    if (excludedCount > 0) {
+      console.log(
+        `[${localTimestamp()}] Meta-analyze: ${excludedCount} events excluded as normal behavior (window=${windowId})`,
+      );
+      events = filtered;
+    }
+  }
 
   // ── Handle quiet windows: write zero effective scores ────
   if (events.length === 0) {

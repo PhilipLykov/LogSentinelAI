@@ -5474,3 +5474,225 @@ tr.event-row-acked:hover {
 .event-row-highlight {
   animation: eventRowHighlight 3s ease-out;
 }
+
+/* ── Mark as Normal Behavior ────────────────────────────── */
+
+.btn-mark-ok {
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-mark-ok:hover {
+  background: rgba(34, 197, 94, 0.25);
+  border-color: #4ade80;
+}
+
+/* Mark OK Modal */
+.mark-ok-modal {
+  max-width: 600px;
+}
+.mark-ok-modal h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 1.15rem;
+}
+.mark-ok-description {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.mark-ok-original {
+  margin-bottom: 16px;
+}
+.mark-ok-original label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.mark-ok-message {
+  background: var(--bg-surface, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 0.82rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.mark-ok-pattern-section {
+  margin-bottom: 16px;
+}
+.mark-ok-pattern-section label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.mark-ok-pattern-input {
+  width: 100%;
+  background: var(--bg-surface, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.82rem;
+  color: var(--text);
+  resize: vertical;
+  box-sizing: border-box;
+}
+.mark-ok-pattern-input:focus {
+  border-color: var(--accent, #3b82f6);
+  outline: none;
+}
+.mark-ok-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+.mark-ok-hint code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+.mark-ok-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+.success-msg {
+  padding: 10px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  margin-bottom: 12px;
+}
+
+/* ── Normal Behavior Panel (Settings) ───────────────────── */
+
+.normal-behavior-panel {
+  padding: 4px 0;
+}
+.normal-behavior-panel h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 1.1rem;
+}
+.nb-description {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+.nb-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+.nb-empty p {
+  margin: 4px 0;
+}
+.nb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.nb-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.nb-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: top;
+}
+.nb-table tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.nb-row-disabled td {
+  opacity: 0.5;
+}
+.nb-pattern-cell {
+  max-width: 280px;
+}
+.nb-pattern-code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.8rem;
+  word-break: break-word;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.nb-original-cell {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nb-original-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.nb-actions-cell {
+  white-space: nowrap;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.nb-edit-pattern {
+  width: 100%;
+  min-width: 200px;
+  background: var(--bg-surface, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  resize: vertical;
+  box-sizing: border-box;
+}
+.nb-edit-notes {
+  width: 100%;
+  min-width: 100px;
+  background: var(--bg-surface, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  color: var(--text);
+  box-sizing: border-box;
+}
+.nb-delete-confirm-text {
+  font-size: 0.78rem;
+  color: var(--red);
+  font-weight: 600;
+}

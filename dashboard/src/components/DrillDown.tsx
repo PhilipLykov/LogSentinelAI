@@ -15,6 +15,9 @@ import {
   acknowledgeFinding,
   reopenFinding,
   acknowledgeEvents,
+  previewNormalBehavior,
+  createNormalBehaviorTemplate,
+  type NormalBehaviorPreview,
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
@@ -55,6 +58,18 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
   const [findingsLoading, setFindingsLoading] = useState(false);
   const [findingsTab, setFindingsTab] = useState<'open' | 'acknowledged' | 'resolved'>('open');
   const [ackingId, setAckingId] = useState<string | null>(null);
+
+  // ── "Mark as Normal Behavior" modal state ───────────────
+  const [markOkModal, setMarkOkModal] = useState<{
+    eventId: string;
+    message: string;
+    systemId?: string;
+  } | null>(null);
+  const [markOkPreview, setMarkOkPreview] = useState<NormalBehaviorPreview | null>(null);
+  const [markOkPattern, setMarkOkPattern] = useState('');
+  const [markOkLoading, setMarkOkLoading] = useState(false);
+  const [markOkError, setMarkOkError] = useState('');
+  const [markOkSuccess, setMarkOkSuccess] = useState('');
 
   // ── Event filter state (multi-select) ───────────────────
   const [filterSeverity, setFilterSeverity] = useState<string[]>([]);
@@ -396,6 +411,56 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
       setBulkAcking(false);
     }
   }, [system.id, system.name]);
+
+  // ── Mark as Normal Behavior ────────────────────────────
+  const openMarkOkModal = useCallback(async (eventId: string, message: string, systemId?: string) => {
+    setMarkOkModal({ eventId, message, systemId });
+    setMarkOkPreview(null);
+    setMarkOkPattern('');
+    setMarkOkError('');
+    setMarkOkSuccess('');
+    setMarkOkLoading(true);
+    try {
+      const preview = await previewNormalBehavior({ event_id: eventId });
+      setMarkOkPreview(preview);
+      setMarkOkPattern(preview.suggested_pattern);
+    } catch (err: unknown) {
+      // Fallback: use message directly
+      try {
+        const preview = await previewNormalBehavior({ message });
+        setMarkOkPreview(preview);
+        setMarkOkPattern(preview.suggested_pattern);
+      } catch {
+        setMarkOkError('Failed to generate pattern preview');
+      }
+    } finally {
+      setMarkOkLoading(false);
+    }
+  }, []);
+
+  const handleMarkOkConfirm = useCallback(async () => {
+    if (!markOkModal || !markOkPattern.trim()) return;
+    setMarkOkLoading(true);
+    setMarkOkError('');
+    try {
+      await createNormalBehaviorTemplate({
+        event_id: markOkModal.eventId,
+        system_id: markOkModal.systemId ?? system.id,
+        pattern: markOkPattern.trim(),
+      });
+      setMarkOkSuccess('Template created. Future matching events will be treated as normal behavior.');
+      setTimeout(() => {
+        setMarkOkModal(null);
+        setMarkOkSuccess('');
+      }, 2500);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      setMarkOkError(`Error: ${msg}`);
+    } finally {
+      setMarkOkLoading(false);
+    }
+  }, [markOkModal, markOkPattern, system.id]);
 
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');
@@ -1068,6 +1133,15 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                             >
                               {copiedId === e.id ? 'Copied!' : 'Copy Event'}
                             </button>
+                            {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+                              <button
+                                className="btn btn-sm btn-mark-ok"
+                                onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(e.id, e.message, system.id); }}
+                                title="Mark this event pattern as normal behavior — future similar events will be ignored by AI"
+                              >
+                                Mark OK
+                              </button>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1099,6 +1173,68 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
               <p>No events found for this system yet.</p>
             </>
           )}
+        </div>
+      )}
+
+      {/* ── Mark as Normal Behavior Modal ── */}
+      {markOkModal && (
+        <div className="modal-overlay" onClick={() => !markOkLoading && setMarkOkModal(null)}>
+          <div className="modal-content mark-ok-modal" onClick={(ev) => ev.stopPropagation()}>
+            <h3>Mark as Normal Behavior</h3>
+            <p className="mark-ok-description">
+              Future events matching this pattern will be treated as normal behavior
+              and excluded from AI scoring and analysis.
+            </p>
+
+            <div className="mark-ok-original">
+              <label>Original message:</label>
+              <pre className="mark-ok-message">{markOkModal.message}</pre>
+            </div>
+
+            {markOkLoading && !markOkPreview && (
+              <div className="settings-loading"><div className="spinner" /> Generating pattern…</div>
+            )}
+
+            {markOkPreview && (
+              <div className="mark-ok-pattern-section">
+                <label htmlFor="mark-ok-pattern-input">
+                  Pattern template (<code>*</code> = matches anything):
+                </label>
+                <textarea
+                  id="mark-ok-pattern-input"
+                  className="mark-ok-pattern-input"
+                  value={markOkPattern}
+                  onChange={(ev) => setMarkOkPattern(ev.target.value)}
+                  rows={3}
+                  disabled={markOkLoading}
+                />
+                <p className="mark-ok-hint">
+                  You can edit the pattern above. Use <code>*</code> for variable parts
+                  (ports, IPs, device names, numbers).
+                </p>
+              </div>
+            )}
+
+            {markOkError && <div className="error-msg" role="alert">{markOkError}</div>}
+            {markOkSuccess && <div className="success-msg" role="status">{markOkSuccess}</div>}
+
+            <div className="mark-ok-actions">
+              <button
+                className="btn btn-outline"
+                onClick={() => setMarkOkModal(null)}
+                disabled={markOkLoading}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleMarkOkConfirm}
+                disabled={markOkLoading || !markOkPattern.trim() || !!markOkSuccess}
+              >
+                {markOkLoading ? 'Saving…' : 'Confirm — Mark as Normal'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

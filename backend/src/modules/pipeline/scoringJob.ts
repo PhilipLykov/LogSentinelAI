@@ -9,6 +9,7 @@ import { resolveCustomPrompts, resolveCriterionGuidelines } from '../llm/aiConfi
 import { buildScoringPrompt } from '../llm/adapter.js';
 import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFilter.js';
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
+import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents } from './normalBehavior.js';
 
 // ── Token Optimization config type ──────────────────────────
 export interface TokenOptimizationConfig {
@@ -143,6 +144,33 @@ export async function runPerEventScoringJob(
 
   if (unscoredEvents.length === 0) {
     console.log(`[${localTimestamp()}] Per-event scoring: no unscored events found.`);
+    return { scored: 0, templates: 0, errors: 0 };
+  }
+
+  // ── 1b. Exclude normal-behavior events ─────────────────────
+  // Load templates once, then filter. Excluded events get zero scores
+  // so they won't be re-fetched as "unscored" on the next run.
+  const normalTemplates = await loadNormalBehaviorTemplates(db, options?.systemId);
+  if (normalTemplates.length > 0) {
+    const { filtered, excluded, excludedCount } = filterNormalBehaviorEvents(unscoredEvents, normalTemplates);
+    if (excludedCount > 0) {
+      console.log(
+        `[${localTimestamp()}] Per-event scoring: ${excludedCount} events excluded as normal behavior`,
+      );
+      // Write zero scores for excluded events so they are marked as "scored"
+      for (const evt of excluded) {
+        const zeroScores: ScoreResult = {} as any;
+        for (const c of CRITERIA) {
+          (zeroScores as any)[c.slug] = 0;
+        }
+        await writeEventScores(db, evt.id, zeroScores);
+      }
+      unscoredEvents = filtered;
+    }
+  }
+
+  if (unscoredEvents.length === 0) {
+    console.log(`[${localTimestamp()}] Per-event scoring: all events matched normal behavior templates.`);
     return { scored: 0, templates: 0, errors: 0 };
   }
 

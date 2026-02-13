@@ -254,7 +254,7 @@ function stringField(entry: Record<string, unknown>, ...keys: string[]): string 
  *
  * Returns just the IP address, or undefined if unparseable.
  */
-function cleanTransportAddress(raw: string | undefined): string | undefined {
+export function cleanTransportAddress(raw: string | undefined): string | undefined {
   if (!raw || raw.length === 0) return undefined;
 
   let addr = raw.trim();

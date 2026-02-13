@@ -24,6 +24,7 @@ import { ApiKeyManagementSection } from './ApiKeyManagementSection';
 import { AuditLogSection } from './AuditLogSection';
 import { RoleManagementSection } from './RoleManagementSection';
 import { ElasticsearchSettings } from './ElasticsearchSettings';
+import { NormalBehaviorPanel } from './NormalBehaviorPanel';
 import { hasPermission } from '../App';
 
 interface SettingsViewProps {
@@ -31,7 +32,7 @@ interface SettingsViewProps {
   currentUser?: CurrentUser | null;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'elasticsearch' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
+type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'normal-behavior' | 'database' | 'elasticsearch' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
 
 type Modal =
   | { kind: 'create-system' }
@@ -304,6 +305,16 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
             Privacy
           </button>
         )}
+        {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+          <button
+            className={`settings-tab${activeTab === 'normal-behavior' ? ' active' : ''}`}
+            onClick={() => setActiveTab('normal-behavior')}
+            role="tab"
+            aria-selected={activeTab === 'normal-behavior'}
+          >
+            Normal Behavior
+          </button>
+        )}
         {hasPermission(currentUser ?? null, 'users:manage') && (
           <button
             className={`settings-tab${activeTab === 'users' ? ' active' : ''}`}
@@ -357,6 +368,8 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         <ElasticsearchSettings onAuthError={onAuthError} />
       ) : activeTab === 'privacy' ? (
         <PrivacySection onAuthError={onAuthError} />
+      ) : activeTab === 'normal-behavior' ? (
+        <NormalBehaviorPanel onAuthError={onAuthError} />
       ) : activeTab === 'users' ? (
         <UserManagementSection onAuthError={onAuthError} currentUser={currentUser} />
       ) : activeTab === 'roles' ? (

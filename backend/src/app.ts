@@ -18,6 +18,7 @@ import { registerApiKeyRoutes } from './modules/auth/apiKeyRoutes.js';
 import { registerAuditRoutes } from './modules/auth/auditRoutes.js';
 import { registerRoleRoutes } from './modules/roles/routes.js';
 import { registerElasticsearchRoutes } from './modules/elasticsearch/routes.js';
+import { registerNormalBehaviorRoutes } from './modules/normalBehavior/routes.js';
 import { localTimestamp } from './config/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -78,6 +79,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerFeaturesRoutes(app);
   await registerEventRoutes(app);
   await registerElasticsearchRoutes(app);
+  await registerNormalBehaviorRoutes(app);
 
   return app;
 }
