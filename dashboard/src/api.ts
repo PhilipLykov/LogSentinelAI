@@ -351,6 +351,18 @@ export interface SystemScoreInfo {
   effective: number;
   meta: number;
   max_event: number;
+  /** 24h peak — only present when the 24h peak exceeds the current (2h) score. */
+  peak_24h?: number;
+}
+
+/** Counts of active (open + acknowledged) findings by severity. */
+export interface ActiveFindingsCounts {
+  total: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
 }
 
 export interface DashboardSystem {
@@ -361,6 +373,8 @@ export interface DashboardSystem {
   event_count_24h: number;
   latest_window: { id: string; from: string; to: string } | null;
   scores: Record<string, SystemScoreInfo>;
+  /** Active findings summary — present when the system has open/acknowledged findings. */
+  active_findings?: ActiveFindingsCounts;
   updated_at: string;
 }
 
@@ -437,8 +451,10 @@ export interface Finding {
   original_severity: string | null;
   consecutive_misses: number;
   // Lifecycle fields (from migration 022)
-  resolution_evidence: string | null;
+  resolution_evidence: string | { text: string; event_ids: string[] } | null;
+  /** @deprecated Flapping eliminated by design — resolved findings are never reopened. Kept for backward compat. */
   reopen_count: number;
+  /** @deprecated Flapping eliminated by design — resolved findings are never reopened. Kept for backward compat. */
   is_flapping: boolean;
 }
 

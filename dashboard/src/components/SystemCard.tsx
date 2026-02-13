@@ -100,6 +100,20 @@ export function SystemCard({ system, onClick, onAuthError, currentUser }: System
           </>
         )}
       </div>
+      {/* Active findings badge */}
+      {system.active_findings && system.active_findings.total > 0 && (
+        <div className="active-findings-badge">
+          <span className="active-findings-count">{system.active_findings.total} active issue{system.active_findings.total !== 1 ? 's' : ''}</span>
+          <span className="active-findings-breakdown">
+            {system.active_findings.critical > 0 && <span className="af-critical">{system.active_findings.critical} critical</span>}
+            {system.active_findings.high > 0 && <span className="af-high">{system.active_findings.high} high</span>}
+            {system.active_findings.medium > 0 && <span className="af-medium">{system.active_findings.medium} medium</span>}
+            {(system.active_findings.low > 0 || system.active_findings.info > 0) && (
+              <span className="af-low">{(system.active_findings.low || 0) + (system.active_findings.info || 0)} low/info</span>
+            )}
+          </span>
+        </div>
+      )}
       {Object.keys(system.scores).length > 0 ? (
         <ScoreBars scores={system.scores} />
       ) : (

@@ -331,6 +331,68 @@ input:focus-visible,
   font-variant-numeric: tabular-nums;
 }
 
+.score-peak-24h {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+/* ── Active Issues Banner ───────────────────────────────── */
+
+.active-issues-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  background: rgba(255, 100, 50, 0.08);
+  border: 1px solid rgba(255, 100, 50, 0.25);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.active-issues-banner:hover {
+  background: rgba(255, 100, 50, 0.14);
+}
+
+.active-issues-count {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--orange, #f0a050);
+  white-space: nowrap;
+}
+
+.active-issues-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.active-issues-sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: var(--text-secondary, #aab);
+}
+
+.active-issues-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.severity-dot-critical { background: var(--red, #e54); }
+.severity-dot-high     { background: var(--orange, #f0a050); }
+.severity-dot-medium   { background: var(--yellow, #edc040); }
+.severity-dot-low      { background: var(--text-secondary, #88a); }
+.severity-dot-info     { background: var(--muted, #667); }
+
 /* ── Drill-down ─────────────────────────────────────────── */
 
 .drill-down {
@@ -851,45 +913,6 @@ input:focus-visible,
   background: var(--primary);
   color: #fff;
   padding: 1px 6px;
-  border-radius: 8px;
-  margin-right: 6px;
-  white-space: nowrap;
-  cursor: help;
-}
-
-/* Flapping badge */
-.finding-flapping-badge {
-  font-size: 0.68rem;
-  font-weight: 700;
-  background: var(--orange, #f59e0b);
-  color: #000;
-  padding: 1px 7px;
-  border-radius: 8px;
-  margin-right: 6px;
-  white-space: nowrap;
-  cursor: help;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  animation: flapping-pulse 2s ease-in-out infinite;
-}
-
-@keyframes flapping-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.65; }
-}
-
-/* Flapping card border accent */
-.finding-card.finding-flapping {
-  border-left: 4px solid var(--orange, #f59e0b);
-}
-
-/* Reopen badge */
-.finding-reopen-badge {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--orange, #f59e0b);
-  padding: 1px 5px;
-  border: 1px solid var(--orange, #f59e0b);
   border-radius: 8px;
   margin-right: 6px;
   white-space: nowrap;
@@ -5361,4 +5384,93 @@ tr.event-row-acked:hover {
   align-self: center;
   margin-left: auto;
   font-size: 0.78rem;
+}
+
+/* ── Active Findings Badge (SystemCard) ──────────────── */
+.active-findings-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 6px 0;
+  background: var(--surface-alt, rgba(239, 68, 68, 0.08));
+  border: 1px solid var(--border, #334155);
+  border-left: 3px solid #ef4444;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+.active-findings-count {
+  font-weight: 700;
+  color: #ef4444;
+  white-space: nowrap;
+}
+.active-findings-breakdown {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.76rem;
+  color: var(--text-muted, #94a3b8);
+}
+.active-findings-breakdown span {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.af-critical { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
+.af-high { background: rgba(249, 115, 22, 0.18); color: #fdba74; }
+.af-medium { background: rgba(234, 179, 8, 0.18); color: #fde047; }
+.af-low { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
+
+/* ── Resolution Evidence (DrillDown Findings) ─────────── */
+.finding-resolution-evidence {
+  margin: 6px 0;
+  padding: 8px 12px;
+  background: var(--surface-alt, rgba(34, 197, 94, 0.06));
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: var(--text, #e2e8f0);
+  line-height: 1.5;
+}
+.finding-resolution-evidence strong {
+  color: #22c55e;
+  margin-right: 4px;
+}
+.resolution-event-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.resolution-links-label {
+  font-size: 0.76rem;
+  color: var(--text-muted, #94a3b8);
+  font-weight: 500;
+}
+.resolution-event-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 4px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #60a5fa;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.resolution-event-link:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: #60a5fa;
+}
+
+/* Highlight animation when scrolling to a proof event */
+@keyframes eventRowHighlight {
+  0% { background-color: rgba(59, 130, 246, 0.3); }
+  100% { background-color: transparent; }
+}
+.event-row-highlight {
+  animation: eventRowHighlight 3s ease-out;
 }

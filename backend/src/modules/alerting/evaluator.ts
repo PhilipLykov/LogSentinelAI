@@ -4,6 +4,9 @@ import { localTimestamp } from '../../config/index.js';
 import { sendNotification, type AlertPayload } from './channels.js';
 import { CRITERIA } from '../../types/index.js';
 
+/** Dashboard base URL — used to build deep-links in notification payloads. */
+const DASHBOARD_URL = process.env.DASHBOARD_URL ?? '';
+
 /**
  * Alert evaluation loop.
  *
@@ -53,7 +56,7 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
         ? JSON.parse(rule.channel_config)
         : rule.channel_config;
 
-      const minScore = triggerConfig.min_score ?? 0.5;
+      const minScore = triggerConfig.min_score ?? 0.75;
       const criterionId = triggerConfig.criterion_id;
       const systemIds: string[] = filters.system_ids ?? [];
 
@@ -111,6 +114,7 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
           body: `${criterion?.name ?? 'Score'} score reached ${scorePct}% (threshold: ${thresholdPct}%) for system "${system?.name ?? 'Unknown'}".`,
           severity,
           variant: 'firing',
+          link: DASHBOARD_URL ? `${DASHBOARD_URL}?system=${pair.system_id}` : undefined,
           system_name: system?.name,
           criterion: criterion?.name,
         };
@@ -177,6 +181,7 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
             body: `${criterion?.name ?? 'Score'} score has dropped below ${thresholdPct}% threshold for system "${system?.name ?? 'Unknown'}". Situation appears to have improved.`,
             severity: 'resolved',
             variant: 'resolved',
+            link: DASHBOARD_URL ? `${DASHBOARD_URL}?system=${prev.system_id}` : undefined,
             system_name: system?.name,
             criterion: criterion?.name,
           };

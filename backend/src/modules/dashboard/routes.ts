@@ -20,6 +20,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
     { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (_request, reply) => {
       const systems = await db('monitored_systems').orderBy('name').select('*');
+      const since2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       const result = [];
@@ -30,17 +31,18 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           .orderBy('to_ts', 'desc')
           .first();
 
-        let scores: Record<string, { effective: number; meta: number; max_event: number }> = {};
+        let scores: Record<string, {
+          effective: number; meta: number; max_event: number;
+          peak_24h?: number;
+        }> = {};
 
         if (latestWindow) {
-          // Use MAX effective scores across all windows in the last 24 hours.
-          // A single 5-minute window of routine events shouldn't mask elevated
-          // scores from recent windows — this gives a "worst recent state" view
-          // which is more appropriate for security monitoring.
-          const effectiveRows = await db('effective_scores')
+          // Primary scores: MAX across recent 2 hours — reflects CURRENT state,
+          // not a stale spike from many hours ago.
+          const recentRows = await db('effective_scores')
             .join('windows', 'effective_scores.window_id', 'windows.id')
             .where('effective_scores.system_id', system.id)
-            .where('windows.to_ts', '>=', since24h)
+            .where('windows.to_ts', '>=', since2h)
             .groupBy('effective_scores.criterion_id')
             .select(
               'effective_scores.criterion_id',
@@ -49,14 +51,52 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
               db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
             );
 
-          for (const row of effectiveRows) {
+          // 24h peak: MAX across the full 24 hours — shown as secondary context
+          // so the user can see if something spiked earlier today.
+          const peak24hRows = await db('effective_scores')
+            .join('windows', 'effective_scores.window_id', 'windows.id')
+            .where('effective_scores.system_id', system.id)
+            .where('windows.to_ts', '>=', since24h)
+            .groupBy('effective_scores.criterion_id')
+            .select(
+              'effective_scores.criterion_id',
+              db.raw('MAX(effective_scores.effective_value) as peak_value'),
+            );
+
+          const peakMap = new Map<number, number>();
+          for (const p of peak24hRows) {
+            peakMap.set(p.criterion_id, Number(p.peak_value) || 0);
+          }
+
+          for (const row of recentRows) {
             const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
             if (criterion) {
+              const eff = Number(row.effective_value) || 0;
+              const peak = peakMap.get(row.criterion_id) ?? eff;
               scores[criterion.slug] = {
-                effective: Number(row.effective_value) || 0,
+                effective: eff,
                 meta: Number(row.meta_score) || 0,
                 max_event: Number(row.max_event_score) || 0,
+                peak_24h: peak > eff ? peak : undefined, // Only include if peak exceeds current
               };
+            }
+          }
+
+          // Also include criteria that only appear in the 24h data (not recent 2h)
+          // — these had activity earlier but are now calm.  Show as 0 effective
+          // with a peak_24h indicator so the user still knows about them.
+          for (const p of peak24hRows) {
+            const criterion = CRITERIA.find((c) => c.id === p.criterion_id);
+            if (criterion && !scores[criterion.slug]) {
+              const peak = Number(p.peak_value) || 0;
+              if (peak > 0) {
+                scores[criterion.slug] = {
+                  effective: 0,
+                  meta: 0,
+                  max_event: 0,
+                  peak_24h: peak,
+                };
+              }
             }
           }
         }
@@ -71,6 +111,26 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         const sysEventSource = getEventSource(system, db);
         const eventCount24h = await sysEventSource.countSystemEvents(system.id, since24h);
 
+        // Active findings count by severity (open + acknowledged)
+        const findingRows = await db('findings')
+          .where({ system_id: system.id })
+          .whereIn('status', ['open', 'acknowledged'])
+          .groupBy('severity')
+          .select('severity', db.raw('COUNT(*) as cnt'));
+
+        let activeFindings: Record<string, number> | undefined;
+        if (findingRows.length > 0) {
+          activeFindings = { total: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+          for (const row of findingRows) {
+            const count = Number(row.cnt) || 0;
+            const sev = (row.severity as string).toLowerCase();
+            if (sev in activeFindings) {
+              (activeFindings as Record<string, number>)[sev] = count;
+            }
+            activeFindings.total += count;
+          }
+        }
+
         result.push({
           id: system.id,
           name: system.name,
@@ -81,6 +141,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             ? { id: latestWindow.id, from: latestWindow.from_ts, to: latestWindow.to_ts }
             : null,
           scores,
+          active_findings: activeFindings,
           updated_at: system.updated_at,
         });
       }

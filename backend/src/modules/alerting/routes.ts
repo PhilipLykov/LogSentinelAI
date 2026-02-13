@@ -204,7 +204,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
         filters: body.filters ? JSON.stringify(body.filters) : null,
         throttle_interval_seconds: body.throttle_interval_seconds ?? null,
         send_recovery: body.send_recovery ?? true,
-        notify_only_on_state_change: body.notify_only_on_state_change ?? false,
+        notify_only_on_state_change: body.notify_only_on_state_change ?? true,
         template_title: body.template_title ?? null,
         template_body: body.template_body ?? null,
         enabled: body.enabled ?? true,

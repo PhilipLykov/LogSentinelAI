@@ -13,7 +13,6 @@ import { loadTokenOptConfig } from './scoringJob.js';
 import {
   deduplicateFindings,
   computeFingerprint,
-  isHigherSeverity,
   jaccardSimilarity,
   type OpenFinding,
 } from './findingDedup.js';
@@ -21,8 +20,8 @@ import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivac
 import { getEventSource } from '../../services/eventSourceFactory.js';
 
 const DEFAULT_W_META = 0.7;
-/** Number of previous window summaries to include as context. */
-const CONTEXT_WINDOW_SIZE = 5;
+/** Default number of previous window summaries to include as context. */
+const DEFAULT_CONTEXT_WINDOW_SIZE = 5;
 
 // ── Meta-analysis configuration defaults ───────────────────────
 
@@ -30,65 +29,50 @@ export interface MetaAnalysisConfig {
   finding_dedup_enabled: boolean;
   finding_dedup_threshold: number;
   max_new_findings_per_window: number;
-  /** @deprecated Use severity-tiered auto-resolve settings instead. Kept for backward compat. */
+  /** @deprecated No longer used — auto-resolve by time is removed. Kept for backward compat. */
   auto_resolve_after_misses: number;
+  /** @deprecated Severity decay is removed — severity only changes with user action or event evidence. */
   severity_decay_enabled: boolean;
   severity_decay_after_occurrences: number;
   max_open_findings_per_system: number;
-  // ── Severity-tiered auto-resolve (consecutive_misses thresholds) ──
+  /** @deprecated No longer used — auto-resolve by time is removed. Kept for backward compat. */
   auto_resolve_critical_days: number;
   auto_resolve_high_days: number;
   auto_resolve_medium_days: number;
   auto_resolve_low_hours: number;
   auto_resolve_info_hours: number;
-  // ── Flapping detection ──
-  flapping_threshold: number;       // reopens before marking as flapping
-  flapping_lookback_days: number;   // how far back to search for resolved findings
+  /** @deprecated Flapping detection removed — resolved findings are never reopened. */
+  flapping_threshold: number;
+  /** How many days back to check for recently resolved findings when detecting recurring issues. */
+  recurring_lookback_days: number;
+  /** Number of previous window summaries to include as LLM context. */
+  context_window_size: number;
 }
 
 const META_CONFIG_DEFAULTS: MetaAnalysisConfig = {
   finding_dedup_enabled: true,
   finding_dedup_threshold: 0.6,
-  max_new_findings_per_window: 5,
-  auto_resolve_after_misses: 0, // Disabled — superseded by severity-tiered settings
-  severity_decay_enabled: true,
+  max_new_findings_per_window: 3,
+  auto_resolve_after_misses: 0,        // Disabled — auto-resolve by time is removed
+  severity_decay_enabled: false,        // Disabled — severity only changes with evidence
   severity_decay_after_occurrences: 10,
-  max_open_findings_per_system: 25,
-  // Severity-tiered auto-resolve defaults
+  max_open_findings_per_system: 50,
+  // Legacy auto-resolve fields (kept for backward compat, no longer used)
   auto_resolve_critical_days: 14,
-  auto_resolve_high_days: 7,
-  auto_resolve_medium_days: 3,
-  auto_resolve_low_hours: 24,
-  auto_resolve_info_hours: 6,
-  // Flapping detection defaults
+  auto_resolve_high_days: 10,
+  auto_resolve_medium_days: 7,
+  auto_resolve_low_hours: 72,
+  auto_resolve_info_hours: 48,
+  // Legacy flapping fields (kept for backward compat, no longer used)
   flapping_threshold: 3,
-  flapping_lookback_days: 14,
+  recurring_lookback_days: 14,
+  // Context window
+  context_window_size: DEFAULT_CONTEXT_WINDOW_SIZE,
 };
 
-/** Convert severity-tiered days/hours to consecutive_misses count (5-min windows). */
-function severityAutoResolveMisses(severity: string, cfg: MetaAnalysisConfig): number {
-  switch (severity) {
-    case 'critical': return cfg.auto_resolve_critical_days * 24 * 12;  // days → 5-min windows
-    case 'high':     return cfg.auto_resolve_high_days * 24 * 12;
-    case 'medium':   return cfg.auto_resolve_medium_days * 24 * 12;
-    case 'low':      return cfg.auto_resolve_low_hours * 12;           // hours → 5-min windows
-    case 'info':     return cfg.auto_resolve_info_hours * 12;
-    default:         return cfg.auto_resolve_medium_days * 24 * 12;    // fallback to medium
-  }
-}
-
-/** Escalate severity by one level (for flapping detection). */
-function escalateSeverity(severity: string): string {
-  const escalation: Record<string, string> = {
-    info: 'low',
-    low: 'medium',
-    medium: 'high',
-    high: 'critical',
-  };
-  return escalation[severity] ?? severity;
-}
-
-/** Load meta-analysis config from app_config, with defaults. */
+/** Load meta-analysis config from app_config, with defaults.
+ *  Handles backward compat: old DB configs may store `flapping_lookback_days`
+ *  which has been renamed to `recurring_lookback_days`. */
 export async function loadMetaAnalysisConfig(db: Knex): Promise<MetaAnalysisConfig> {
   try {
     const row = await db('app_config').where({ key: 'meta_analysis_config' }).first();
@@ -96,6 +80,10 @@ export async function loadMetaAnalysisConfig(db: Knex): Promise<MetaAnalysisConf
       let parsed = row.value;
       if (typeof parsed === 'string') {
         parsed = JSON.parse(parsed);
+      }
+      // Backward compat: migrate old key name if present
+      if (parsed && typeof parsed === 'object' && 'flapping_lookback_days' in parsed && !('recurring_lookback_days' in parsed)) {
+        (parsed as Record<string, unknown>).recurring_lookback_days = (parsed as Record<string, unknown>).flapping_lookback_days;
       }
       return { ...META_CONFIG_DEFAULTS, ...(parsed as Partial<MetaAnalysisConfig>) };
     }
@@ -118,27 +106,16 @@ interface ExtendedMetaContext extends MetaAnalysisContext {
   openFindings: ExtendedOpenFinding[];
 }
 
-// ── Severity decay helpers ─────────────────────────────────────
-
-const SEVERITY_DECAY_MAP: Record<string, string> = {
-  critical: 'high',
-  high: 'medium',
-  // medium and below: no decay
-};
-
-function decaySeverity(severity: string): string | null {
-  return SEVERITY_DECAY_MAP[severity] ?? null;
-}
-
 /**
  * Meta-analyze a window: gather events + scores, build historical context,
  * call LLM, store meta_results + findings, compute effective scores.
  *
- * Enhanced with:
+ * Design principles:
+ *   - Findings only close with EVENT EVIDENCE (no time-based auto-resolve)
+ *   - Resolved findings are NEVER reopened (recurring issues create new findings)
  *   - TF-IDF cosine / Jaccard finding deduplication (post-LLM safety net)
- *   - Auto-resolution of stale findings (consecutive_misses)
- *   - Severity decay for persistent non-escalating findings
  *   - Max open findings cap with priority eviction
+ *   - Resolution evidence stored as JSON with event IDs for traceability
  */
 export async function metaAnalyzeWindow(
   db: Knex,
@@ -195,8 +172,21 @@ export async function metaAnalyzeWindow(
     },
   );
 
+  // ── Handle quiet windows: write zero effective scores ────
   if (events.length === 0) {
-    console.log(`[${localTimestamp()}] Meta-analyze: no events in window ${windowId}`);
+    console.log(`[${localTimestamp()}] Meta-analyze: no events in window ${windowId}, writing zero scores`);
+    const nowIso = new Date().toISOString();
+    for (const criterion of CRITERIA) {
+      await db.raw(`
+        INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
+        VALUES (?, ?, ?, 0, 0, 0, ?)
+        ON CONFLICT (window_id, system_id, criterion_id)
+        DO UPDATE SET effective_value = 0,
+                      meta_score = 0,
+                      max_event_score = 0,
+                      updated_at = EXCLUDED.updated_at
+      `, [windowId, system.id, criterion.id, nowIso]);
+    }
     return;
   }
 
@@ -226,10 +216,11 @@ export async function metaAnalyzeWindow(
     }
   }
 
-  // Deduplicate by template for LLM input
+  // Deduplicate by template for LLM input — also track representative event ID
   const templateGroups = new Map<string, {
     message: string; severity?: string; count: number;
     scores?: ScoreResult; acknowledged: boolean;
+    representativeEventId: string; // First event's real ID for evidence linking
   }>();
   for (const event of events) {
     const key = event.template_id ?? event.id;
@@ -240,12 +231,20 @@ export async function metaAnalyzeWindow(
         count: 0,
         scores: scoreMap.get(event.id),
         acknowledged: !!event.acknowledged_at,
+        representativeEventId: event.id,
       });
     }
     templateGroups.get(key)!.count++;
   }
 
-  let eventsForLlm = Array.from(templateGroups.values()).map((g) => {
+  // Build eventsForLlm AND the index→eventId mapping for evidence linking
+  const templateGroupValues = Array.from(templateGroups.values());
+  const eventIndexToId = new Map<number, string>(); // 1-indexed → event UUID
+
+  let eventsForLlm = templateGroupValues.map((g, i) => {
+    // Track mapping: LLM event number (1-indexed) → representative event ID
+    eventIndexToId.set(i + 1, g.representativeEventId);
+
     // In context_only mode, annotate acknowledged events with the ack prompt
     if (g.acknowledged && ackMode === 'context_only') {
       return {
@@ -270,9 +269,15 @@ export async function metaAnalyzeWindow(
   // ── High-score prioritisation ─────────────────────────────
   // Sort by max score descending so the most important events are always
   // included even when the template count exceeds the cap.
+  // NOTE: After sorting, the eventIndexToId mapping is rebuilt to stay in sync.
   if (prioritizeHighScores && eventsForLlm.length > 1) {
-    eventsForLlm = eventsForLlm.sort((a, b) => {
-      const safeMax = (s: typeof a.scores) => {
+    // Pair events with their original representative IDs before sorting
+    const paired = eventsForLlm.map((e, i) => ({
+      event: e,
+      repId: templateGroupValues[i].representativeEventId,
+    }));
+    paired.sort((a, b) => {
+      const safeMax = (s: typeof a.event.scores) => {
         if (!s) return 0;
         return Math.max(
           Number(s.it_security) || 0, Number(s.performance_degradation) || 0,
@@ -280,12 +285,19 @@ export async function metaAnalyzeWindow(
           Number(s.compliance_audit) || 0, Number(s.operational_risk) || 0,
         );
       };
-      return safeMax(b.scores) - safeMax(a.scores); // descending
+      return safeMax(b.event.scores) - safeMax(a.event.scores); // descending
     });
+    // Rebuild both arrays in sorted order
+    eventsForLlm = paired.map((p) => p.event);
+    eventIndexToId.clear();
+    for (let i = 0; i < paired.length; i++) {
+      eventIndexToId.set(i + 1, paired[i].repId);
+    }
   }
 
   // ── Build historical context (sliding window) ───────────
-  const context = await buildMetaContext(db, system.id, windowId);
+  const contextWindowSize = metaCfg.context_window_size ?? DEFAULT_CONTEXT_WINDOW_SIZE;
+  const context = await buildMetaContext(db, system.id, windowId, contextWindowSize);
 
   // ── Call LLM for meta-analysis ──────────────────────────
   const { result, usage } = await llm.metaAnalyze(
@@ -328,17 +340,15 @@ export async function metaAnalyzeWindow(
   // Track which open findings were matched (seen in this window)
   const matchedOpenIds = new Set(findingsToUpdate.map((u) => u.id));
 
-  // ── Flapping detection: dedup new findings against recently resolved ──
-  // If a new finding matches a recently resolved one, reopen it instead of
-  // creating a duplicate. Track reopen_count for flapping detection.
-  const findingsToReopen: Array<{
-    id: string; newSeverity?: string; reopen_count: number; is_flapping: boolean;
-  }> = [];
+  // ── Recurring issue detection: check new findings against recently resolved ──
+  // Instead of reopening resolved findings (which causes flapping), we create
+  // a NEW finding with a reference to the previous one. Resolved findings
+  // stay resolved permanently.
   const remainingToInsert: typeof findingsToInsert = [];
 
   if (metaCfg.finding_dedup_enabled && findingsToInsert.length > 0) {
     const lookbackDate = new Date(
-      Date.now() - metaCfg.flapping_lookback_days * 24 * 60 * 60 * 1000,
+      Date.now() - (metaCfg.recurring_lookback_days || 14) * 24 * 60 * 60 * 1000,
     ).toISOString();
 
     const resolvedRows = await db('findings')
@@ -346,15 +356,12 @@ export async function metaAnalyzeWindow(
       .where('resolved_at', '>=', lookbackDate)
       .orderBy('resolved_at', 'desc')
       .limit(50)
-      .select('id', 'text', 'severity', 'criterion_slug', 'fingerprint',
-              'reopen_count', 'is_flapping');
+      .select('id', 'text', 'severity', 'criterion_slug', 'fingerprint', 'resolved_at');
 
-    // Track already-matched resolved IDs to prevent two new findings from
-    // reopening the same resolved finding (which would silently drop one).
     const matchedResolvedIds = new Set<string>();
 
     for (const finding of findingsToInsert) {
-      let matched = false;
+      let matchedResolved: any = null;
 
       if (resolvedRows.length > 0) {
         const fp = computeFingerprint(finding.text);
@@ -367,44 +374,40 @@ export async function metaAnalyzeWindow(
         );
 
         if (fpMatch) {
-          const newReopenCount = (Number(fpMatch.reopen_count) || 0) + 1;
-          const isFlapping = newReopenCount >= metaCfg.flapping_threshold;
-          findingsToReopen.push({
-            id: fpMatch.id,
-            newSeverity: isHigherSeverity(finding.severity, fpMatch.severity) ? finding.severity
-              : isFlapping ? escalateSeverity(fpMatch.severity) : undefined,
-            reopen_count: newReopenCount,
-            is_flapping: isFlapping || Boolean(fpMatch.is_flapping),
-          });
+          matchedResolved = fpMatch;
           matchedResolvedIds.add(fpMatch.id);
-          matched = true;
         }
 
         // If no fingerprint match, try Jaccard similarity
-        if (!matched) {
+        if (!matchedResolved) {
           for (const rf of resolvedRows) {
             if (matchedResolvedIds.has(rf.id)) continue;
             if (!criterionMatchSimple(finding.criterion, rf.criterion_slug)) continue;
             const sim = jaccardSimilarity(finding.text, rf.text);
             if (sim >= metaCfg.finding_dedup_threshold) {
-              const newReopenCount = (Number(rf.reopen_count) || 0) + 1;
-              const isFlapping = newReopenCount >= metaCfg.flapping_threshold;
-              findingsToReopen.push({
-                id: rf.id,
-                newSeverity: isHigherSeverity(finding.severity, rf.severity) ? finding.severity
-                  : isFlapping ? escalateSeverity(rf.severity) : undefined,
-                reopen_count: newReopenCount,
-                is_flapping: isFlapping || Boolean(rf.is_flapping),
-              });
+              matchedResolved = rf;
               matchedResolvedIds.add(rf.id);
-              matched = true;
               break;
             }
           }
         }
       }
 
-      if (!matched) {
+      if (matchedResolved) {
+        // Create a NEW finding with reference to the previous resolved one
+        const resolvedDate = matchedResolved.resolved_at
+          ? formatShort(matchedResolved.resolved_at)
+          : 'recently';
+        remainingToInsert.push({
+          text: `Recurring: ${finding.text} (previously resolved ${resolvedDate})`,
+          severity: finding.severity,
+          criterion: finding.criterion,
+        });
+        console.log(
+          `[${localTimestamp()}] Recurring issue detected: new finding references ` +
+          `resolved finding ${matchedResolved.id} (system ${system.id})`,
+        );
+      } else {
         remainingToInsert.push(finding);
       }
     }
@@ -412,7 +415,7 @@ export async function metaAnalyzeWindow(
     remainingToInsert.push(...findingsToInsert);
   }
 
-  // Replace findingsToInsert with the remaining ones after flapping dedup
+  // Replace findingsToInsert with the processed ones
   findingsToInsert = remainingToInsert;
 
   // ── Persist everything in a transaction ─────────────────
@@ -469,41 +472,40 @@ export async function metaAnalyzeWindow(
         .update(updateFields);
     }
 
-    // ── Reopen resolved findings (flapping detection) ────
-    for (const reopen of findingsToReopen) {
-      const updateFields: Record<string, any> = {
-        status: 'open',
-        resolved_at: null,
-        resolved_by_meta_id: null,
-        resolution_evidence: null,
-        last_seen_at: nowIso,
-        consecutive_misses: 0,
-        occurrence_count: trx.raw('occurrence_count + 1'),
-        reopen_count: reopen.reopen_count,
-        is_flapping: reopen.is_flapping,
-      };
-      if (reopen.newSeverity) {
-        updateFields.severity = reopen.newSeverity;
-      }
-      await trx('findings')
-        .where({ id: reopen.id, status: 'resolved' })
-        .update(updateFields);
-
-      if (reopen.is_flapping) {
-        console.log(
-          `[${localTimestamp()}] Flapping detected: finding ${reopen.id} ` +
-          `reopened ${reopen.reopen_count} times (threshold: ${metaCfg.flapping_threshold})`,
-        );
-      }
-    }
-
-    // ── Mark LLM-resolved findings (with resolution evidence) ──
+    // ── Mark LLM-resolved findings (with event evidence) ────
+    // Only accept resolutions that include event_refs (specific event references).
+    // Resolutions without event proof are rejected to prevent false closures.
     if (result.resolvedFindingIndices.length > 0 && context.openFindings.length > 0) {
       for (const resolvedEntry of result.resolvedFindings) {
         const openFinding = context.openFindings.find((f) => f.index === resolvedEntry.index);
         if (!openFinding) continue;
         const dbId = openFinding._dbId;
         if (!dbId) continue;
+
+        // Map event_refs to real event IDs
+        const eventRefs: number[] = resolvedEntry.event_refs ?? [];
+        const mappedEventIds: string[] = [];
+        for (const ref of eventRefs) {
+          const realId = eventIndexToId.get(ref);
+          if (realId) mappedEventIds.push(realId);
+        }
+
+        // Reject resolutions without event evidence
+        if (mappedEventIds.length === 0) {
+          console.log(
+            `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
+            `(${openFinding.text.slice(0, 60)}…): no event_refs provided. ` +
+            `Findings require event evidence to be resolved.`,
+          );
+          continue;
+        }
+
+        // Store resolution evidence as JSON with event IDs
+        const evidenceObj = {
+          text: resolvedEntry.evidence ?? '',
+          event_ids: mappedEventIds,
+        };
+
         await trx('findings')
           .where({ id: dbId })
           .whereIn('status', ['open', 'acknowledged'])
@@ -511,15 +513,20 @@ export async function metaAnalyzeWindow(
             status: 'resolved',
             resolved_at: nowIso,
             resolved_by_meta_id: metaId,
-            resolution_evidence: resolvedEntry.evidence ?? null,
+            resolution_evidence: JSON.stringify(evidenceObj),
           });
+
+        console.log(
+          `[${localTimestamp()}] Resolved finding ${dbId} with event evidence: ` +
+          `${mappedEventIds.length} event(s) referenced`,
+        );
       }
     }
 
     // ── Handle LLM-confirmed "still active" findings ───────
     // The LLM can confirm that an open finding is still active even if no new
     // duplicate finding was emitted.  We reset consecutive_misses for these and
-    // refresh last_seen_at so they don't age out.
+    // refresh last_seen_at so they are clearly marked as recently observed.
     const stillActiveDbIds = new Set<string>();
     if (result.stillActiveFindingIndices.length > 0 && context.openFindings.length > 0) {
       for (const idx of result.stillActiveFindingIndices) {
@@ -545,12 +552,30 @@ export async function metaAnalyzeWindow(
       }
     }
 
+    // ── Safeguard: detect empty LLM classification ─────────
+    // If the LLM returned no still_active_indices AND no resolved_indices AND
+    // there are open findings in context, it likely failed to classify them.
+    // In this case, skip the consecutive_misses increment entirely for this
+    // window to avoid inflating the dormancy counter due to LLM failures.
+    const llmClassifiedAnything =
+      result.stillActiveFindingIndices.length > 0 ||
+      result.resolvedFindingIndices.length > 0;
+    const hasOpenFindingsInContext = context.openFindings.length > 0;
+    const skipMissIncrement = hasOpenFindingsInContext && !llmClassifiedAnything;
+
+    if (skipMissIncrement) {
+      console.log(
+        `[${localTimestamp()}] Skipping consecutive_misses increment: LLM returned empty ` +
+        `still_active + resolved lists with ${context.openFindings.length} open finding(s) ` +
+        `in context (system ${system.id})`,
+      );
+    }
+
     // ── Increment consecutive_misses for unmatched findings ─
     // ALL open/acknowledged findings for this system that were NOT matched by
-    // dedup, NOT reopened, NOT resolved by the LLM, and NOT confirmed as still
-    // active have "missed" a window.
-    // Uses a system-wide query (no limit) so findings beyond the LLM context
-    // cap (30) are still tracked and can eventually be auto-resolved.
+    // dedup, NOT resolved by the LLM, and NOT confirmed as still active have
+    // "missed" a window. This counter is used as a dormancy indicator in the UI.
+    // NOTE: This counter does NOT trigger auto-resolution (removed by design).
     const excludeFromMissIds = new Set<string>(matchedOpenIds);
     // Add LLM-resolved finding IDs to the exclusion set
     if (result.resolvedFindingIndices.length > 0 && context.openFindings.length > 0) {
@@ -567,81 +592,19 @@ export async function metaAnalyzeWindow(
     for (const id of newlyInsertedIds) {
       excludeFromMissIds.add(id);
     }
-    // Add reopened finding IDs (they were reset to consecutive_misses=0)
-    for (const reopen of findingsToReopen) {
-      excludeFromMissIds.add(reopen.id);
-    }
 
     // Increment consecutive_misses for all other open/acknowledged findings
-    const missIncrementQuery = trx('findings')
-      .where({ system_id: system.id })
-      .whereIn('status', ['open', 'acknowledged']);
-    if (excludeFromMissIds.size > 0) {
-      missIncrementQuery.whereNotIn('id', Array.from(excludeFromMissIds));
-    }
-    await missIncrementQuery.update({
-      consecutive_misses: trx.raw('consecutive_misses + 1'),
-    });
-
-    // ── Auto-resolve stale findings (severity-tiered) ─────
-    // Each severity level has its own threshold (in consecutive_misses).
-    // E.g. critical findings persist for 14 days, info for 6 hours.
-    {
-      const staleFindings = await trx('findings')
+    // (skipped when LLM failed to classify any findings — see safeguard above)
+    if (!skipMissIncrement) {
+      const missIncrementQuery = trx('findings')
         .where({ system_id: system.id })
-        .whereIn('status', ['open', 'acknowledged'])
-        .select('id', 'severity', 'consecutive_misses');
-
-      const toAutoResolve: string[] = [];
-      for (const f of staleFindings) {
-        const threshold = severityAutoResolveMisses(f.severity, metaCfg);
-        if (threshold > 0 && Number(f.consecutive_misses) >= threshold) {
-          toAutoResolve.push(f.id);
-        }
+        .whereIn('status', ['open', 'acknowledged']);
+      if (excludeFromMissIds.size > 0) {
+        missIncrementQuery.whereNotIn('id', Array.from(excludeFromMissIds));
       }
-
-      if (toAutoResolve.length > 0) {
-        for (const findingId of toAutoResolve) {
-          const finding = staleFindings.find((f: any) => f.id === findingId);
-          const threshold = finding ? severityAutoResolveMisses(finding.severity, metaCfg) : 0;
-          const windowCount = Number(finding?.consecutive_misses ?? threshold);
-          const timespan = `${Math.round(windowCount * 5 / 60)} hours`;
-          await trx('findings')
-            .where({ id: findingId })
-            .update({
-              status: 'resolved',
-              resolved_at: nowIso,
-              resolved_by_meta_id: metaId,
-              resolution_evidence: `Auto-resolved: not detected for ${windowCount} consecutive analysis windows (~${timespan})`,
-            });
-        }
-        console.log(
-          `[${localTimestamp()}] Auto-resolved ${toAutoResolve.length} stale finding(s) ` +
-          `(severity-tiered thresholds)`,
-        );
-      }
-    }
-
-    // ── Severity decay for persistent non-escalating findings ──
-    if (metaCfg.severity_decay_enabled && metaCfg.severity_decay_after_occurrences > 0) {
-      const decayCandidates = await trx('findings')
-        .where({ system_id: system.id, status: 'open' })
-        .where('occurrence_count', '>=', metaCfg.severity_decay_after_occurrences)
-        .whereIn('severity', ['critical', 'high'])
-        .select('id', 'severity', 'original_severity');
-
-      for (const f of decayCandidates) {
-        const decayed = decaySeverity(f.severity);
-        if (decayed) {
-          await trx('findings')
-            .where({ id: f.id })
-            .update({ severity: decayed });
-          console.log(
-            `[${localTimestamp()}] Severity decay: finding ${f.id} ` +
-            `${f.severity} → ${decayed} (occurrence_count >= ${metaCfg.severity_decay_after_occurrences})`,
-          );
-        }
-      }
+      await missIncrementQuery.update({
+        consecutive_misses: trx.raw('consecutive_misses + 1'),
+      });
     }
 
     // ── Max open findings cap with priority eviction ──────
@@ -679,7 +642,10 @@ export async function metaAnalyzeWindow(
               status: 'resolved',
               resolved_at: nowIso,
               resolved_by_meta_id: metaId,
-              resolution_evidence: `Auto-resolved: evicted due to open findings cap (max=${metaCfg.max_open_findings_per_system})`,
+              resolution_evidence: JSON.stringify({
+                text: `Auto-closed: evicted due to open findings cap (max=${metaCfg.max_open_findings_per_system})`,
+                event_ids: [],
+              }),
             });
           console.log(
             `[${localTimestamp()}] Evicted ${evictIds.length} finding(s) ` +
@@ -728,13 +694,18 @@ export async function metaAnalyzeWindow(
     });
   });
 
+  // Count accepted resolutions (those with event evidence)
+  const acceptedResolutions = result.resolvedFindings.filter((r) => {
+    const refs = r.event_refs ?? [];
+    return refs.some((ref) => eventIndexToId.has(ref));
+  }).length;
+
   console.log(
     `[${localTimestamp()}] Meta-analyze window ${windowId}: ` +
     `${events.length} events, ${eventsForLlm.length} templates, ` +
     `LLM returned ${result.findings.length} findings → ` +
     `${findingsToInsert.length} new, ${findingsToUpdate.length} dedup-merged, ` +
-    `${findingsToReopen.length} reopened, ` +
-    `${result.resolvedFindingIndices.length} LLM-resolved, ` +
+    `${acceptedResolutions} resolved (with evidence), ` +
     `tokens=${usage.token_input + usage.token_output}`,
   );
 }
@@ -748,6 +719,7 @@ async function buildMetaContext(
   db: Knex,
   systemId: string,
   currentWindowId: string,
+  contextWindowSize: number = DEFAULT_CONTEXT_WINDOW_SIZE,
 ): Promise<ExtendedMetaContext> {
   // 1. Previous window summaries (last N, excluding the current window)
   const prevMetas = await db('meta_results')
@@ -755,7 +727,7 @@ async function buildMetaContext(
     .where('windows.system_id', systemId)
     .whereNot('windows.id', currentWindowId)
     .orderBy('windows.to_ts', 'desc')
-    .limit(CONTEXT_WINDOW_SIZE)
+    .limit(contextWindowSize)
     .select('meta_results.summary', 'windows.from_ts', 'windows.to_ts');
 
   const previousSummaries = prevMetas.map((m: any) => ({

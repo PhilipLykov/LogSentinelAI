@@ -406,6 +406,20 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
     findingsTab === 'acknowledged' ? ackedFindings :
     resolvedFindings;
 
+  // Active issues = open + acknowledged (things that need attention)
+  const activeFindings = [...openFindings, ...ackedFindings];
+  const findingsPanelRef = useRef<HTMLDivElement>(null);
+
+  // Severity breakdown for the banner
+  const severityBreakdown = activeFindings.reduce<Record<string, number>>((acc, f) => {
+    const sev = (f.severity ?? 'info').toLowerCase();
+    acc[sev] = (acc[sev] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  // Flapping detection removed — resolved findings are never reopened.
+  // Recurring issues create new findings with "Recurring:" prefix.
+
   return (
     <div className="drill-down">
       <button
@@ -443,6 +457,37 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
       {bulkAckMsg && (
         <div className={`bulk-ack-msg${bulkAckMsg.startsWith('Error') ? ' bulk-ack-error' : ''}`}>
           {bulkAckMsg}
+        </div>
+      )}
+
+      {/* ── Active Issues Summary banner ── */}
+      {!findingsLoading && activeFindings.length > 0 && (
+        <div
+          className="active-issues-banner"
+          onClick={() => findingsPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              findingsPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+          }}
+          title="Click to scroll to findings"
+        >
+          <span className="active-issues-count">
+            {activeFindings.length} active issue{activeFindings.length !== 1 ? 's' : ''}
+          </span>
+          <span className="active-issues-breakdown">
+            {(['critical', 'high', 'medium', 'low', 'info'] as const)
+              .filter((sev) => severityBreakdown[sev])
+              .map((sev) => (
+                <span key={sev} className={`active-issues-sev active-issues-sev-${sev}`}>
+                  <span className={`active-issues-dot severity-dot-${sev}`} />
+                  {severityBreakdown[sev]} {sev}
+                </span>
+              ))}
+          </span>
         </div>
       )}
 
@@ -676,7 +721,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
 
       {/* ── Persistent Findings panel ── */}
       {!loading && (
-        <div className="findings-panel">
+        <div className="findings-panel" ref={findingsPanelRef}>
           <div className="findings-panel-header">
             <h4>AI Findings</h4>
             <div className="findings-tabs">
@@ -730,13 +775,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
             <div className="findings-list-new">
               {displayedFindings.map((f) => {
                 const occurrences = Number(f.occurrence_count) || 1;
-                const reopens = Number(f.reopen_count) || 0;
                 // Robust check: PostgreSQL boolean may arrive as true, 't', or 1 over JSON
-                const isFlapping = f.is_flapping === true || (f.is_flapping as unknown) === 't' || (f.is_flapping as unknown) === 1;
                 const hasDecay = f.original_severity && f.original_severity !== f.severity;
                 const showLastSeen = occurrences > 1 && f.last_seen_at;
                 return (
-                  <div key={f.id} className={`finding-card finding-status-${f.status}${isFlapping ? ' finding-flapping' : ''}`}>
+                  <div key={f.id} className={`finding-card finding-status-${f.status}`}>
                     <div className="finding-card-top">
                       <span className={`finding-severity finding-severity-${f.severity}`}>
                         {hasDecay && (
@@ -746,28 +789,12 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                         )}
                         {f.severity}
                       </span>
-                      {isFlapping && (
-                        <span
-                          className="finding-flapping-badge"
-                          title={`This issue keeps recurring — resolved and reopened ${reopens} times. The oscillation pattern itself may indicate an unresolved root cause.`}
-                        >
-                          FLAPPING
-                        </span>
-                      )}
                       {occurrences > 1 && (
                         <span
                           className="finding-occurrence-badge"
                           title={`Detected ${occurrences} times across analysis windows`}
                         >
                           &times;{occurrences}
-                        </span>
-                      )}
-                      {reopens > 0 && !isFlapping && (
-                        <span
-                          className="finding-reopen-badge"
-                          title={`Reopened ${reopens} time${reopens !== 1 ? 's' : ''} after being resolved`}
-                        >
-                          Reopened {reopens}&times;
                         </span>
                       )}
                       {f.criterion_slug && (
@@ -785,12 +812,54 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                       </span>
                     </div>
                     <p className="finding-text">{f.text}</p>
-                    {/* Resolution evidence for resolved findings */}
-                    {f.status === 'resolved' && f.resolution_evidence && (
-                      <p className="finding-resolution-evidence" title="Evidence for resolution">
-                        Resolution: {f.resolution_evidence}
-                      </p>
-                    )}
+                    {/* Resolution evidence for resolved findings — with clickable event links */}
+                    {f.status === 'resolved' && f.resolution_evidence && (() => {
+                      let evidence: { text?: string; event_ids?: string[] } | null = null;
+                      try {
+                        evidence = typeof f.resolution_evidence === 'string'
+                          ? JSON.parse(f.resolution_evidence)
+                          : f.resolution_evidence as { text?: string; event_ids?: string[] };
+                      } catch { /* legacy plain-text evidence */ }
+
+                      if (evidence && typeof evidence === 'object' && evidence.text) {
+                        return (
+                          <div className="finding-resolution-evidence" title="Evidence for resolution">
+                            <strong>Resolution:</strong> {evidence.text}
+                            {evidence.event_ids && evidence.event_ids.length > 0 && (
+                              <div className="resolution-event-links">
+                                <span className="resolution-links-label">Proof events:</span>
+                                {evidence.event_ids.map((eid, idx) => (
+                                  <button
+                                    key={eid}
+                                    className="resolution-event-link"
+                                    title={`Scroll to event ${eid}`}
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      const row = document.getElementById(`event-row-${eid}`);
+                                      if (row) {
+                                        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                        setExpandedRow(eid);
+                                        row.classList.add('event-row-highlight');
+                                        setTimeout(() => row.classList.remove('event-row-highlight'), 3000);
+                                      }
+                                    }}
+                                  >
+                                    Event #{idx + 1}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      // Fallback for legacy plain-text evidence
+                      return (
+                        <p className="finding-resolution-evidence" title="Evidence for resolution">
+                          Resolution: {String(f.resolution_evidence)}
+                        </p>
+                      );
+                    })()}
                     <div className="finding-card-actions">
                       {f.status === 'open' && hasPermission(currentUser ?? null, 'events:acknowledge') && (
                         <button
@@ -920,6 +989,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
               {events.map((e) => (
                 <Fragment key={e.id}>
                   <tr
+                    id={`event-row-${e.id}`}
                     className={`event-row ${expandedRow === e.id ? 'expanded' : ''}`}
                     onClick={() => toggleRow(e.id)}
                     tabIndex={0}

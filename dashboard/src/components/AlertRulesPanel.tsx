@@ -229,7 +229,7 @@ export function AlertRulesPanel({ onAuthError }: AlertRulesPanelProps) {
         <div className="alert-rules-list">
           {rules.map((rule) => {
             const tc = rule.trigger_config as { min_score?: number; criterion_id?: number };
-            const pct = Math.round((tc.min_score ?? 0.5) * 100);
+            const pct = Math.round((tc.min_score ?? 0.75) * 100);
             const sev = severityForThreshold(pct);
             const filters = rule.filters as { system_ids?: string[] } | null;
             const filteredSystems = filters?.system_ids ?? [];
@@ -371,11 +371,11 @@ function RuleFormModal({
 
   const [channelId, setChannelId] = useState(rule?.channel_id ?? channels[0]?.id ?? '');
   const [criterionId, setCriterionId] = useState<number | null>(tc?.criterion_id ?? null);
-  const [threshold, setThreshold] = useState(Math.round((tc?.min_score ?? 0.5) * 100));
+  const [threshold, setThreshold] = useState(Math.round((tc?.min_score ?? 0.75) * 100));
   const [selectedSystems, setSelectedSystems] = useState<string[]>(filters?.system_ids ?? []);
   const [allSystems, setAllSystems] = useState(!(filters?.system_ids?.length));
   const [throttleMinutes, setThrottleMinutes] = useState(
-    rule?.throttle_interval_seconds ? Math.round(rule.throttle_interval_seconds / 60) : 5,
+    rule?.throttle_interval_seconds ? Math.round(rule.throttle_interval_seconds / 60) : 30,
   );
   const [sendRecovery, setSendRecovery] = useState(rule?.send_recovery ?? true);
   const [onlyStateChange, setOnlyStateChange] = useState(rule?.notify_only_on_state_change ?? true);
@@ -536,7 +536,7 @@ function RuleFormModal({
                 className="input-short"
               />
               <span className="form-hint">
-                0 = no throttle (alert on every evaluation cycle). Recommended: 5-15 minutes.
+                0 = no throttle (alert on every evaluation cycle). Recommended: 15-60 minutes.
               </span>
             </div>
 
