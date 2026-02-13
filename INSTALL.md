@@ -192,6 +192,7 @@ LogSentinel AI includes a built-in **Fluent Bit** log collector that receives lo
 | **Syslog UDP** | 5140/udp | RFC 3164 — routers, switches, firewalls, legacy Linux |
 | **Syslog TCP** | 5140/tcp | RFC 5424 — rsyslog, syslog-ng, modern systems |
 | **OpenTelemetry** | 4318 | OTLP/HTTP (`/v1/logs`, `/v1/traces`, `/v1/metrics`) + OTLP/gRPC on the same port |
+| **Docker Logs** | *(file tail)* | Reads container logs from `/var/lib/docker/containers` (json-file driver) |
 
 #### Setup Steps
 
@@ -257,6 +258,17 @@ curl http://localhost:2020/api/v1/metrics/prometheus
 - Port **5140** is used instead of 514 to avoid requiring root/privileged mode. You can change this in `.env` or configure your syslog sources to send to 5140.
 - The OpenTelemetry input accepts **logs, metrics, and traces**. Currently, LogSentinel AI processes logs; metrics and traces are forwarded but may not be fully analyzed.
 - ECS (Elastic Common Schema) fields from OTel/Beats agents are automatically flattened by the ingest API (e.g., `host.name` → `host`, `source.ip` → `source_ip`).
+- **Docker container logs** are collected by tailing `/var/lib/docker/containers/*/*.log` (mounted read-only). This requires the Docker daemon to use the **`json-file`** log driver (the default). If your Docker daemon is configured to use the `syslog` driver, change it in `/etc/docker/daemon.json`:
+  ```json
+  {
+    "log-driver": "json-file",
+    "log-opts": {
+      "max-size": "50m",
+      "max-file": "3"
+    }
+  }
+  ```
+  Then restart Docker: `sudo systemctl restart docker`. Container names are resolved automatically from Docker metadata, and events are routed with `source_ip=127.0.0.1` (matching a "Docker Host" system selector). Fluent Bit's own logs are automatically excluded to prevent feedback loops.
 - You can also run Fluent Bit **outside Docker** and point its HTTP output at your LogSentinel AI backend's ingest API.
 
 ### Managing the Stack

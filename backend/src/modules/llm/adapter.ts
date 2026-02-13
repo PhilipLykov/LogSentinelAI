@@ -513,24 +513,33 @@ export class OpenAiAdapter implements LlmAdapter {
 
     sections.push(`Log sources: ${sourceLabels.join(', ')}`);
 
+    // ── Normal behavior patterns — MUST come BEFORE previous summaries ──
+    // The LLM must read the exclusion instruction before encountering any
+    // old summary text that references these patterns. Otherwise it absorbs
+    // the old wording and tends to repeat it (even with a "marked as normal" caveat).
+    if (context?.normalBehaviorPatterns?.length) {
+      sections.push('');
+      sections.push('=== NORMAL BEHAVIOR — MANDATORY EXCLUSION ===');
+      sections.push('The operator has PERMANENTLY verified the following event patterns as normal/expected.');
+      sections.push('You MUST completely EXCLUDE them from your entire output:');
+      sections.push('- Do NOT mention them in the summary — not even to say they were "marked as normal" or "acknowledged"');
+      sections.push('- Do NOT create findings for them');
+      sections.push('- Do NOT include them in recommendations');
+      sections.push('- If previous summaries or open findings reference these patterns, IGNORE those references entirely');
+      sections.push('- Write your summary AS IF these events and patterns never existed');
+      sections.push('Patterns:');
+      for (const pattern of context.normalBehaviorPatterns) {
+        sections.push(`  • ${pattern}`);
+      }
+      sections.push('=== END NORMAL BEHAVIOR ===');
+    }
+
     // ── Historical context (sliding window, like a conversation context) ──
     if (context?.previousSummaries?.length) {
       sections.push('');
       sections.push('=== Previous analysis context (most recent first) ===');
       for (const ps of context.previousSummaries) {
         sections.push(`[${ps.windowTime}] ${ps.summary}`);
-      }
-    }
-
-    // ── Normal behavior patterns (operator-marked, must be excluded) ──
-    if (context?.normalBehaviorPatterns?.length) {
-      sections.push('');
-      sections.push('=== NORMAL BEHAVIOR (operator-verified, DO NOT report) ===');
-      sections.push('The following event patterns have been explicitly marked as normal/expected by the operator.');
-      sections.push('Do NOT mention them in the summary, do NOT create findings for them, and do NOT include them in recommendations.');
-      sections.push('If previous summaries or open findings reference these patterns, disregard those references.');
-      for (const pattern of context.normalBehaviorPatterns) {
-        sections.push(`  • ${pattern}`);
       }
     }
 

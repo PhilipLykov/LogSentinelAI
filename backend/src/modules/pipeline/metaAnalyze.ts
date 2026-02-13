@@ -383,15 +383,41 @@ export async function metaAnalyzeWindow(
     // Provide patterns to LLM so it can disregard old summary references
     context.normalBehaviorPatterns = normalTemplates.map((t) => t.pattern);
 
-    // Annotate previous summaries so the LLM knows referenced issues may be
-    // outdated. Without this, the LLM tends to repeat old conclusions from
-    // previous windows even when the underlying events are now filtered.
+    // Remove previous summaries that discuss normal-behavior patterns.
+    // Merely annotating summaries was insufficient — the LLM reads the old
+    // summary text (e.g. "Switch 2's power stack lost redundancy") before
+    // reaching any appended note, and repeats it in the new summary.
+    // Instead, we filter out entire summaries that have significant keyword
+    // overlap with normal-behavior templates so the LLM never sees them.
     if (context.previousSummaries.length > 0) {
-      context.previousSummaries = context.previousSummaries.map((ps) => ({
-        ...ps,
-        summary: ps.summary +
-          ' [NOTE: Some issues mentioned above have since been marked as normal behavior by the operator and should be disregarded in the new analysis.]',
-      }));
+      const normalKeywords = new Set<string>();
+      for (const t of normalTemplates) {
+        for (const w of significantWords(t.pattern.replace(/\*/g, ' '))) {
+          normalKeywords.add(w);
+        }
+      }
+
+      if (normalKeywords.size > 0) {
+        const before = context.previousSummaries.length;
+        context.previousSummaries = context.previousSummaries.filter((ps) => {
+          const summaryWords = significantWords(ps.summary);
+          let overlap = 0;
+          for (const w of normalKeywords) {
+            if (summaryWords.has(w)) overlap++;
+          }
+          // If ≥40% of normal-pattern keywords appear in the summary,
+          // it likely discusses those patterns — remove it.
+          const ratio = overlap / normalKeywords.size;
+          return ratio < 0.4;
+        });
+        const removed = before - context.previousSummaries.length;
+        if (removed > 0) {
+          console.log(
+            `[${localTimestamp()}] Meta-analyze: removed ${removed} previous summary/summaries ` +
+            `referencing normal-behavior patterns (window=${windowId})`,
+          );
+        }
+      }
     }
   }
 

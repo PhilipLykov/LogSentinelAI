@@ -98,6 +98,13 @@ services:
     volumes:
       - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
       - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      - ./fluent-bit/docker-enrich.lua:/fluent-bit/etc/docker-enrich.lua:ro
+      # Docker container logs (json-file driver) — tailed by FB tail input.
+      # Requires Docker daemon to use json-file log driver (the default).
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Persistent offset DB so Fluent Bit resumes from the correct
+      # position after restarts (avoids replaying old logs).
+      - fluent-bit-db:/fluent-bit/tail-db
     depends_on:
       backend:
         condition: service_started
@@ -107,4 +114,6 @@ volumes:
   pgdata:
     driver: local
   backups:
+    driver: local
+  fluent-bit-db:
     driver: local
