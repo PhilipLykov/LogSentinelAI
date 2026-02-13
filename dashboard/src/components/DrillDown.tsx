@@ -561,6 +561,12 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         }
       }
 
+      // Refresh meta summary text
+      try {
+        const freshMeta = await fetchSystemMeta(system.id);
+        if (freshMeta) setMeta(freshMeta);
+      } catch { /* ignore */ }
+
       // Refresh parent dashboard scores
       onRefreshSystem?.();
     } catch (err: unknown) {
@@ -922,7 +928,23 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
           <div className="meta-summary-header">
             <span className="meta-summary-icon">&#x1F9E0;</span>
             <h4>Meta Analysis Summary</h4>
+            {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+              <button
+                className="btn btn-xs btn-primary"
+                style={{ marginLeft: 'auto' }}
+                onClick={handleReEvaluate}
+                disabled={reEvalLoading}
+                title="Re-run AI meta-analysis on recent events (excludes events marked as normal behavior)"
+              >
+                {reEvalLoading ? 'Analyzing…' : 'Re-evaluate'}
+              </button>
+            )}
           </div>
+          {reEvalMsg && (
+            <div className={`reeval-msg${reEvalMsg.startsWith('Error') ? ' reeval-error' : ''}`}>
+              {reEvalMsg}
+            </div>
+          )}
           <div className="meta-summary-body">
             {meta.summary}
           </div>

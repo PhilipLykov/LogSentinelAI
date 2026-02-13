@@ -98,13 +98,33 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           continue;
         }
 
-        // 1b. Failsafe: if the event payload has no source_ip, fall back to the
-        //     HTTP client's IP address. This ensures source_ip is always populated
-        //     even when the log shipper (e.g. Fluent Bit) does not include it.
-        //     rsyslogd typically sends fromhost-ip; Fluent Bit may not unless
-        //     source_address_key is configured.
+        // 1b. Source-IP resolution: ensure source_ip reflects the REAL origin.
+        //
+        //  Problem: Docker NATs UDP packets, so Fluent Bit's source_address_key
+        //  produces the Docker bridge gateway IP (e.g. 172.17.0.1) instead of the
+        //  actual device IP. The syslog header's `host` field survives NAT because
+        //  it's inside the payload.
+        //
+        //  Strategy:
+        //   a) If source_ip is missing entirely, fall back to request.ip.
+        //   b) If source_ip is a Docker/container-internal IP but the syslog
+        //      `host` field contains what looks like a real (non-internal) IP,
+        //      prefer `host` — it came from the syslog header and is reliable.
         if (!normalized.source_ip && request.ip) {
           normalized.source_ip = cleanTransportAddress(request.ip) ?? request.ip;
+        } else if (
+          normalized.source_ip &&
+          normalized.host &&
+          normalized.source_ip !== normalized.host &&
+          isDockerInternalIp(normalized.source_ip) &&
+          isIpv4Address(normalized.host) &&
+          !isDockerInternalIp(normalized.host)
+        ) {
+          // The syslog host header has a real device IP; source_ip is NATted.
+          app.log.debug(
+            `[${localTimestamp()}] Docker NAT detected: source_ip=${normalized.source_ip} → using syslog host=${normalized.host}`,
+          );
+          normalized.source_ip = normalized.host;
         }
         // Also back-fill host if it was left empty (normalizer falls back host→source_ip,
         // but that runs before this fallback).
@@ -179,4 +199,25 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
       return reply.code(accepted > 0 ? 200 : 400).send(response);
     },
   );
+}
+
+// ── Docker NAT helpers ──────────────────────────────────────────
+
+/**
+ * Check if an IP belongs to Docker/container-internal ranges.
+ *
+ * Conservative: only 172.16.0.0/12 (Docker's default) and loopback.
+ * Does NOT include 10.0.0.0/8 or 192.168.0.0/16 because those are
+ * commonly used in real enterprise networks and should not be treated
+ * as "Docker internal."
+ */
+function isDockerInternalIp(ip: string): boolean {
+  return /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ||
+         ip === '127.0.0.1' ||
+         ip === '::1';
+}
+
+/** Check if a string looks like a dotted IPv4 address. */
+function isIpv4Address(value: string): boolean {
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value);
 }

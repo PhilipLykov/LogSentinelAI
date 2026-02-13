@@ -66,16 +66,16 @@ services:
   #   - OpenTelemetry OTLP/HTTP + OTLP/gRPC (default port 4318)
   #
   # Forwards everything to the LogSentinel AI ingest API.
+  #
+  # IMPORTANT: network_mode: host is required so that Fluent Bit sees the
+  # real source IP addresses of syslog senders. Without it, Docker NATs
+  # UDP packets and all sources appear as the Docker bridge gateway
+  # (e.g. 172.17.0.1), breaking source-IP-based routing to systems.
   log-collector:
     image: fluent/fluent-bit:latest
     profiles:
       - collector
-    ports:
-      - "${SYSLOG_UDP_PORT:-5140}:${SYSLOG_UDP_PORT:-5140}/udp"
-      - "${SYSLOG_TCP_PORT:-5140}:${SYSLOG_TCP_PORT:-5140}/tcp"
-      - "${SYSLOG_RFC5424_PORT:-5141}:${SYSLOG_RFC5424_PORT:-5141}/tcp"
-      - "${OTEL_PORT:-4318}:${OTEL_PORT:-4318}"
-      - "2020:2020"   # Fluent Bit health/metrics endpoint
+    network_mode: host
     environment:
       # Syslog listener ports (RFC 3164 — used by most devices)
       - SYSLOG_UDP_PORT=${SYSLOG_UDP_PORT:-5140}
@@ -87,8 +87,11 @@ services:
       # LogSentinel AI backend connection
       # INGEST_API_KEY is required when using the collector profile.
       # Generate one in the dashboard: Settings → API Keys.
-      - INGEST_HOST=backend
-      - INGEST_PORT=3000
+      # With network_mode: host, Docker DNS (service names) is unavailable.
+      # Use 127.0.0.1 to reach the backend on the same host, or the backend's
+      # external IP if it runs on a different machine.
+      - INGEST_HOST=${INGEST_HOST:-127.0.0.1}
+      - INGEST_PORT=${PORT:-3000}
       - INGEST_API_KEY=${INGEST_API_KEY:-}
       # Fluent Bit log level (error, warn, info, debug, trace)
       - LOG_LEVEL=${COLLECTOR_LOG_LEVEL:-info}

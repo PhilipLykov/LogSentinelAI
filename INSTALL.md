@@ -233,8 +233,10 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://<your-server-ip>:4318
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `INGEST_API_KEY` | *(required)* | API key for authenticating with the ingest API |
+| `INGEST_HOST` | `127.0.0.1` | Backend hostname/IP. Use `127.0.0.1` when backend runs on the same host, or the backend's IP if on a different machine. Docker service names (e.g., `backend`) do **not** work because the collector uses `network_mode: host`. |
 | `SYSLOG_UDP_PORT` | `5140` | Syslog UDP listen port |
 | `SYSLOG_TCP_PORT` | `5140` | Syslog TCP listen port |
+| `SYSLOG_RFC5424_PORT` | `5141` | Syslog RFC 5424 TCP listen port (modern format) |
 | `OTEL_PORT` | `4318` | OpenTelemetry OTLP listen port (HTTP + gRPC) |
 | `COLLECTOR_LOG_LEVEL` | `info` | Fluent Bit log level (`error`, `warn`, `info`, `debug`) |
 
@@ -251,6 +253,7 @@ curl http://localhost:2020/api/v1/metrics/prometheus
 
 #### Notes
 
+- The collector runs with **`network_mode: host`** so that Fluent Bit sees the real source IP addresses of syslog senders. Without this, Docker NATs UDP packets and all sources appear to come from the Docker bridge gateway (e.g., `172.17.0.1`), which breaks source-IP-based routing to monitored systems. Because of host networking, Docker DNS (service names like `backend`) is unavailable — use `INGEST_HOST=127.0.0.1` to reach the backend on the same machine, or set it to the backend's external IP if running on a different host. Explicit port mappings are not needed (ports are directly on the host).
 - Port **5140** is used instead of 514 to avoid requiring root/privileged mode. You can change this in `.env` or configure your syslog sources to send to 5140.
 - The OpenTelemetry input accepts **logs, metrics, and traces**. Currently, LogSentinel AI processes logs; metrics and traces are forwarded but may not be fully analyzed.
 - ECS (Elastic Common Schema) fields from OTel/Beats agents are automatically flattened by the ingest API (e.g., `host.name` → `host`, `source.ip` → `source_ip`).
@@ -889,3 +892,10 @@ docker compose exec backend sh -c "ls -la /app/data/backups/"
 | `PIPELINE_INTERVAL_MS` | No | `300000` | AI pipeline run interval (ms) |
 | `TZ` | No | `Europe/Chisinau` | Timezone for application logs |
 | `DB_EXTERNAL_PORT` | No | `127.0.0.1:5432` | Expose PostgreSQL to host |
+| `INGEST_API_KEY` | Collector only | — | API key for the built-in Fluent Bit collector |
+| `INGEST_HOST` | No | `127.0.0.1` | Backend host for Fluent Bit (Docker DNS unavailable with `network_mode: host`) |
+| `SYSLOG_UDP_PORT` | No | `5140` | Syslog UDP listen port |
+| `SYSLOG_TCP_PORT` | No | `5140` | Syslog TCP listen port |
+| `SYSLOG_RFC5424_PORT` | No | `5141` | Syslog RFC 5424 TCP listen port |
+| `OTEL_PORT` | No | `4318` | OpenTelemetry OTLP listen port |
+| `COLLECTOR_LOG_LEVEL` | No | `info` | Fluent Bit log verbosity |
