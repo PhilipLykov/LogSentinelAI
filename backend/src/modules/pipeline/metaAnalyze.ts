@@ -192,7 +192,7 @@ export async function metaAnalyzeWindow(
     }
   }
 
-  // ── Handle quiet windows: write zero effective scores ────
+  // ── Handle quiet windows: write zero effective scores + meta_results ──
   if (events.length === 0) {
     console.log(`[${localTimestamp()}] Meta-analyze: no events in window ${windowId}, writing zero scores`);
     const nowIso = new Date().toISOString();
@@ -207,6 +207,21 @@ export async function metaAnalyzeWindow(
                       updated_at = EXCLUDED.updated_at
       `, [windowId, system.id, criterion.id, nowIso]);
     }
+
+    // Write a meta_results row so fetchSystemMeta returns a clean summary
+    // instead of falling back to an older window's stale text.
+    const zeroMetaScores: Record<string, number> = {};
+    for (const c of CRITERIA) { zeroMetaScores[c.slug] = 0; }
+    await db('meta_results').insert({
+      id: uuidv4(),
+      window_id: windowId,
+      meta_scores: JSON.stringify(zeroMetaScores),
+      summary: 'No significant events detected in the current analysis window. All monitored events match normal operational patterns.',
+      findings: JSON.stringify([]),
+      recommended_action: null,
+      key_event_ids: null,
+    });
+
     return;
   }
 
@@ -367,6 +382,17 @@ export async function metaAnalyzeWindow(
 
     // Provide patterns to LLM so it can disregard old summary references
     context.normalBehaviorPatterns = normalTemplates.map((t) => t.pattern);
+
+    // Annotate previous summaries so the LLM knows referenced issues may be
+    // outdated. Without this, the LLM tends to repeat old conclusions from
+    // previous windows even when the underlying events are now filtered.
+    if (context.previousSummaries.length > 0) {
+      context.previousSummaries = context.previousSummaries.map((ps) => ({
+        ...ps,
+        summary: ps.summary +
+          ' [NOTE: Some issues mentioned above have since been marked as normal behavior by the operator and should be disregarded in the new analysis.]',
+      }));
+    }
   }
 
   // ── Call LLM for meta-analysis ──────────────────────────

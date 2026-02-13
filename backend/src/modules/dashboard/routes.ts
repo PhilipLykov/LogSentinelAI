@@ -484,6 +484,25 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         });
       }
 
+      // Invalidate stale effective_scores from older windows within the 2-hour
+      // range so the dashboard's MAX() query returns only the fresh re-evaluate
+      // scores. Without this, old windows still pull the dashboard scores up.
+      await db('effective_scores')
+        .where('system_id', systemId)
+        .whereNot('window_id', windowId)
+        .whereIn('window_id', function () {
+          this.select('id').from('windows')
+            .where('system_id', systemId)
+            .where('to_ts', '>=', from_ts)
+            .whereNot('id', windowId);
+        })
+        .update({
+          effective_value: 0,
+          meta_score: 0,
+          max_event_score: 0,
+          updated_at: new Date().toISOString(),
+        });
+
       // Fetch the new effective scores to return to the caller
       const newScores: Record<string, { effective: number; meta: number; max_event: number }> = {};
       const effRows = await db('effective_scores').where({ window_id: windowId, system_id: systemId });
