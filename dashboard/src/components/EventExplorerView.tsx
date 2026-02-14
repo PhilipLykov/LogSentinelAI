@@ -805,7 +805,7 @@ export function EventExplorerView({ onAuthError }: Props) {
             Total: <strong>{result.total.toLocaleString()}</strong> event{result.total !== 1 ? 's' : ''}
             {result.events.length > 0 && (
               <span className="ee-showing">
-                {' '}(showing {((result.page - 1) * result.limit) + 1}\u2013{Math.min(result.page * result.limit, result.total)})
+                {' '}(showing {((result.page - 1) * result.limit) + 1}{'\u2013'}{Math.min(result.page * result.limit, result.total)})
               </span>
             )}
           </div>

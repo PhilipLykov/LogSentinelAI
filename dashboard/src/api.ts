@@ -500,6 +500,7 @@ export interface SystemEventsOpts {
   program?: string[];
   service?: string[];
   facility?: string[];
+  event_ids?: string[];
 }
 
 export async function fetchSystemEvents(
@@ -516,6 +517,7 @@ export async function fetchSystemEvents(
   if (opts?.program?.length) params.set('program', opts.program.join(','));
   if (opts?.service?.length) params.set('service', opts.service.join(','));
   if (opts?.facility?.length) params.set('facility', opts.facility.join(','));
+  if (opts?.event_ids?.length) params.set('event_ids', opts.event_ids.join(','));
   return apiFetch(`/api/v1/systems/${systemId}/events?${params}`);
 }
 

@@ -355,6 +355,7 @@ export class EsEventSource implements EventSource {
       program?: string[];
       service?: string[];
       facility?: string[];
+      event_ids?: string[];
     },
   ): Promise<LogEvent[]> {
     const client = await this.getClient();
@@ -369,6 +370,9 @@ export class EsEventSource implements EventSource {
       if (opts.to) range.lte = opts.to;
       filter.push({ range: { [tsField]: range } });
     }
+
+    // Fetch specific events by ID (used by proof-event links in findings)
+    if (opts.event_ids?.length) filter.push({ ids: { values: opts.event_ids } });
 
     // Multi-value filters — ES terms query
     if (opts.severity?.length) filter.push({ terms: { [this.esField('severity')]: opts.severity } });

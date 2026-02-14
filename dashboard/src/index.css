@@ -5524,6 +5524,61 @@ tr.event-row-acked:hover {
   border-color: #4ade80;
 }
 
+/* Proof Event Modal */
+.proof-event-modal {
+  max-width: 650px;
+}
+.proof-event-modal h3 {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 1.1rem;
+}
+.proof-event-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+}
+.proof-event-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 4px 12px 4px 0;
+  white-space: nowrap;
+  width: 90px;
+  vertical-align: top;
+}
+.proof-event-table td {
+  font-size: 0.85rem;
+  color: var(--text);
+  padding: 4px 0;
+  word-break: break-word;
+}
+.proof-event-id {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.proof-event-message-block {
+  margin-top: 8px;
+}
+.proof-event-message-block strong {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.proof-event-message {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 /* Mark OK Modal */
 .mark-ok-modal {
   max-width: 600px;

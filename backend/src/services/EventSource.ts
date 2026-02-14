@@ -134,6 +134,7 @@ export interface EventSource {
       program?: string[];
       service?: string[];
       facility?: string[];
+      event_ids?: string[];
     },
   ): Promise<LogEvent[]>;
 

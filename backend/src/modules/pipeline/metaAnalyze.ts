@@ -650,13 +650,25 @@ export async function metaAnalyzeWindow(
         // the resolution is clearly a hallucination / logic failure.
         const evidenceText = (resolvedEntry.evidence ?? '').toLowerCase();
         const contradictoryPhrases = [
+          // Explicit "not resolved" variants
           'remains unresolved', 'not resolved', 'still unresolved',
-          'issue remains', 'issue persists', 'still active',
-          'still occurring', 'still happening', 'still ongoing',
           'not been resolved', 'has not been fixed', 'not yet resolved',
           'no evidence of resolution', 'no resolution',
-          'issue continues', 'problem persists', 'problem remains',
-          'still present', 'still exists',
+          // "Still" + ongoing state
+          'still active', 'still occurring', 'still happening', 'still ongoing',
+          'still present', 'still exists', 'still persists',
+          // Persistence / continuation — standalone keywords that always indicate
+          // the issue is NOT resolved (a valid resolution would say "resolved",
+          // "fixed", "cleared", etc. — never "persists")
+          'persists', 'unresolved', 'continues to',
+          // Phrase variants with subject
+          'issue remains', 'issue persists', 'issue continues',
+          'problem persists', 'problem remains', 'problem continues',
+          'error persists', 'error remains', 'error continues',
+          // Explicit "no change" or "no fix"
+          'no change', 'no fix', 'not fixed', 'unchanged',
+          // "Indicating" phrases
+          'indicating the issue remains',
         ];
         const isContradictory = contradictoryPhrases.some((p) => evidenceText.includes(p));
         if (isContradictory) {
@@ -681,22 +693,39 @@ export async function metaAnalyzeWindow(
         // If every referenced event's message is substantially similar to the
         // finding's own text, the LLM is resolving the finding with the same
         // problem — not a counter-event. This is always invalid.
+        //
+        // Uses BIDIRECTIONAL overlap: checks both finding→event and event→finding
+        // directions. If either direction shows ≥40% significant-word overlap,
+        // the event is considered self-referential. This catches cases where the
+        // finding text is long but the event message is short (or vice-versa).
         const stripPunctuation = (s: string) => s.replace(/[^a-z0-9\s]/g, '');
         const findingTextClean = stripPunctuation(openFinding.text.toLowerCase());
         const findingWords = new Set(findingTextClean.split(/\s+/).filter((w) => w.length > 3));
+        const SELF_REF_THRESHOLD = 0.4;
         let allSelfReferential = true;
         for (const ref of eventRefs) {
           const refMessage = stripPunctuation((eventIndexToMessage.get(ref) ?? '').toLowerCase());
           if (!refMessage) continue;
           const refWords = new Set(refMessage.split(/\s+/).filter((w) => w.length > 3));
-          // One-directional overlap: if ≥50% of the finding's significant words
-          // appear in the event message, the event describes the same problem.
-          let overlap = 0;
+
+          // Direction A: finding→event (how much of the finding appears in the event)
+          let overlapA = 0;
           for (const w of findingWords) {
-            if (refWords.has(w)) overlap++;
+            if (refWords.has(w)) overlapA++;
           }
-          const overlapRatio = findingWords.size > 0 ? overlap / findingWords.size : 0;
-          if (overlapRatio < 0.5) {
+          const ratioA = findingWords.size > 0 ? overlapA / findingWords.size : 0;
+
+          // Direction B: event→finding (how much of the event appears in the finding)
+          let overlapB = 0;
+          for (const w of refWords) {
+            if (findingWords.has(w)) overlapB++;
+          }
+          const ratioB = refWords.size > 0 ? overlapB / refWords.size : 0;
+
+          // If EITHER direction shows significant overlap, the event describes
+          // the same problem (not a counter-event).
+          const isSelfRef = ratioA >= SELF_REF_THRESHOLD || ratioB >= SELF_REF_THRESHOLD;
+          if (!isSelfRef) {
             allSelfReferential = false;
             break;
           }

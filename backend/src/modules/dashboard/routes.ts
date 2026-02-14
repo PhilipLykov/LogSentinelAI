@@ -144,6 +144,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       from?: string; to?: string; limit?: string;
       severity?: string; host?: string; program?: string;
       service?: string; facility?: string;
+      event_ids?: string;
     };
   }>(
     '/api/v1/systems/:id/events',
@@ -164,6 +165,11 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       // Load system to determine event source
       const system = await db('monitored_systems').where({ id }).first();
       const sysEventSource = system ? getEventSource(system, db) : eventSource;
+      // Validate event_ids — only accept UUID-like strings to prevent injection
+      const rawEventIds = parseFilter(request.query.event_ids);
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const event_ids = rawEventIds?.filter((id) => uuidRegex.test(id));
+
       const events = await sysEventSource.getSystemEvents(id, {
         from, to, limit,
         severity: parseFilter(request.query.severity),
@@ -171,6 +177,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         program: parseFilter(request.query.program),
         service: parseFilter(request.query.service),
         facility: parseFilter(request.query.facility),
+        event_ids: event_ids?.length ? event_ids : undefined,
       });
       return reply.send(events);
     },

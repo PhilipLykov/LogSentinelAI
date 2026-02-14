@@ -266,6 +266,7 @@ export class PgEventSource implements EventSource {
       program?: string[];
       service?: string[];
       facility?: string[];
+      event_ids?: string[];
     },
   ): Promise<LogEvent[]> {
     let query = this.db('events')
@@ -275,6 +276,9 @@ export class PgEventSource implements EventSource {
 
     if (opts.from) query = query.where('timestamp', '>=', opts.from);
     if (opts.to) query = query.where('timestamp', '<=', opts.to);
+
+    // Fetch specific events by ID (used by proof-event links in findings)
+    if (opts.event_ids?.length) query = query.whereIn('id', opts.event_ids);
 
     // Multi-value filters — WHERE column IN (...)
     if (opts.severity?.length) query = query.whereIn('severity', opts.severity);

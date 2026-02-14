@@ -81,6 +81,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   const [reEvalLoading, setReEvalLoading] = useState(false);
   const [reEvalMsg, setReEvalMsg] = useState('');
 
+  // ── Proof event modal (for events not in the loaded list) ──
+  const [proofEvent, setProofEvent] = useState<LogEvent | null>(null);
+  const [proofEventLoading, setProofEventLoading] = useState(false);
+
   // ── Dashboard config (score display window label) ─────
   const [scoreWindowDays, setScoreWindowDays] = useState(7);
 
@@ -1096,15 +1100,32 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                                   <button
                                     key={eid}
                                     className="resolution-event-link"
-                                    title={`Scroll to event ${eid}`}
+                                    title={`View event ${eid}`}
                                     onClick={(ev) => {
                                       ev.stopPropagation();
+                                      // Try to scroll to it if it's in the loaded list
                                       const row = document.getElementById(`event-row-${eid}`);
                                       if (row) {
                                         row.scrollIntoView({ behavior: 'smooth', block: 'center' });
                                         setExpandedRow(eid);
                                         row.classList.add('event-row-highlight');
                                         setTimeout(() => row.classList.remove('event-row-highlight'), 3000);
+                                      } else {
+                                        // Event not in loaded list — fetch by ID and show in modal
+                                        setProofEventLoading(true);
+                                        setProofEvent(null);
+                                        fetchSystemEvents(system.id, { event_ids: [eid], limit: 1 })
+                                          .then((evts) => {
+                                            if (evts.length > 0) {
+                                              setProofEvent(evts[0]);
+                                            } else {
+                                              setProofEvent({ id: eid, system_id: system.id, timestamp: '', message: '(Event not found — it may have been deleted by retention.)' } as LogEvent);
+                                            }
+                                          })
+                                          .catch(() => {
+                                            setProofEvent({ id: eid, system_id: system.id, timestamp: '', message: '(Failed to load event.)' } as LogEvent);
+                                          })
+                                          .finally(() => setProofEventLoading(false));
                                       }
                                     }}
                                   >
@@ -1380,6 +1401,40 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       )}
 
       {/* ── Mark as Normal Behavior Modal ── */}
+      {/* ── Proof Event Detail Modal ── */}
+      {(proofEvent || proofEventLoading) && (
+        <div className="modal-overlay" onClick={() => { if (!proofEventLoading) { setProofEvent(null); } }}>
+          <div className="modal-content proof-event-modal" onClick={(ev) => ev.stopPropagation()}>
+            <h3>Proof Event</h3>
+            {proofEventLoading ? (
+              <div className="settings-loading"><div className="spinner" /> Loading event…</div>
+            ) : proofEvent ? (
+              <div className="proof-event-detail">
+                <table className="proof-event-table">
+                  <tbody>
+                    <tr><th>ID</th><td><code className="proof-event-id">{proofEvent.id}</code></td></tr>
+                    {proofEvent.timestamp && <tr><th>Time</th><td>{safeDate(proofEvent.timestamp)}</td></tr>}
+                    {proofEvent.severity && <tr><th>Severity</th><td><span className={`severity-badge ${proofEvent.severity.toLowerCase()}`}>{proofEvent.severity}</span></td></tr>}
+                    {proofEvent.host && <tr><th>Host</th><td>{proofEvent.host}</td></tr>}
+                    {proofEvent.source_ip && <tr><th>Source IP</th><td>{proofEvent.source_ip}</td></tr>}
+                    {proofEvent.program && <tr><th>Program</th><td>{proofEvent.program}</td></tr>}
+                    {proofEvent.service && <tr><th>Service</th><td>{proofEvent.service}</td></tr>}
+                    {proofEvent.facility && <tr><th>Facility</th><td>{proofEvent.facility}</td></tr>}
+                  </tbody>
+                </table>
+                <div className="proof-event-message-block">
+                  <strong>Message:</strong>
+                  <pre className="proof-event-message">{proofEvent.message}</pre>
+                </div>
+              </div>
+            ) : null}
+            <div className="modal-actions">
+              <button className="btn btn-outline" onClick={() => setProofEvent(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {markOkModal && (
         <div className="modal-overlay" onClick={() => !markOkLoading && setMarkOkModal(null)}>
           <div className="modal-content mark-ok-modal" onClick={(ev) => ev.stopPropagation()}>
