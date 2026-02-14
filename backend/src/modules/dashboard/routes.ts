@@ -165,10 +165,11 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       // Load system to determine event source
       const system = await db('monitored_systems').where({ id }).first();
       const sysEventSource = system ? getEventSource(system, db) : eventSource;
-      // Validate event_ids — only accept UUID-like strings to prevent injection
+      // Validate event_ids — accept UUIDs (PostgreSQL) and alphanumeric IDs
+      // (Elasticsearch _id). Reject anything with SQL/NoSQL-significant chars.
       const rawEventIds = parseFilter(request.query.event_ids);
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      const event_ids = rawEventIds?.filter((id) => uuidRegex.test(id));
+      const safeIdRegex = /^[0-9a-zA-Z_-]{1,128}$/;
+      const event_ids = rawEventIds?.filter((id) => safeIdRegex.test(id));
 
       const events = await sysEventSource.getSystemEvents(id, {
         from, to, limit,
@@ -437,11 +438,11 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       llm.updateConfig({ apiKey: aiCfg.apiKey, model: aiCfg.model, baseUrl: aiCfg.baseUrl });
 
       // Create a window covering the last 2 hours of events for the LLM to analyze.
-      // The dashboard displays MAX(effective_scores) over 7 days, but the
-      // re-evaluate window covers only the most recent 2 hours of events
-      // (a larger window would be too expensive for the LLM). After analysis,
-      // stale scores from older windows in the 7-day range are zeroed so the
-      // dashboard reflects the fresh analysis.
+      // The dashboard displays MAX(effective_scores) over the configured display
+      // window (Settings > Dashboard, default 7 days), but the re-evaluate window
+      // covers only the most recent 2 hours of events (a larger window would be
+      // too expensive for the LLM). After analysis, stale scores from older windows
+      // in the display range are zeroed so the dashboard reflects the fresh analysis.
       const to_ts = new Date().toISOString();
       const from_ts = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 

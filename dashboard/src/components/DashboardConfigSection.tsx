@@ -146,7 +146,7 @@ export function DashboardConfigSection({ onAuthError }: DashboardConfigSectionPr
         <button
           className="btn btn-outline"
           onClick={handleReset}
-          disabled={saving}
+          disabled={saving || !defaults}
           title="Reset to default value"
         >
           Reset to Default
