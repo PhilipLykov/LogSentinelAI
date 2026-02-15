@@ -104,7 +104,7 @@ export interface LlmAdapter {
     events: Array<{ message: string; severity?: string; host?: string; program?: string }>,
     systemDescription: string,
     sourceLabels: string[],
-    options?: { systemPrompt?: string },
+    options?: { systemPrompt?: string; modelOverride?: string },
   ): Promise<ScoreEventsResult>;
 
   metaAnalyze(
@@ -117,7 +117,7 @@ export interface LlmAdapter {
     systemDescription: string,
     sourceLabels: string[],
     context?: MetaAnalysisContext,
-    options?: { systemPrompt?: string },
+    options?: { systemPrompt?: string; modelOverride?: string },
   ): Promise<MetaAnalyzeResult>;
 }
 
