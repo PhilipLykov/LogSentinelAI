@@ -85,7 +85,7 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [pipeError, setPipeError] = useState('');
 
   // Per-task model config state
-  const [taskModelResp, setTaskModelResp] = useState<TaskModelConfigResponse | null>(null);
+  const [, setTaskModelResp] = useState<TaskModelConfigResponse | null>(null);
   const [taskModelCfg, setTaskModelCfg] = useState<TaskModelConfig | null>(null);
   const [showTaskModel, setShowTaskModel] = useState(false);
   const [savingTaskModel, setSavingTaskModel] = useState(false);
