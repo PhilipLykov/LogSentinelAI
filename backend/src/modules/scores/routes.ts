@@ -197,6 +197,16 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
           .join('criteria', 'event_scores.criterion_id', 'criteria.id')
           .where('events.system_id', systemId)
           .where('event_scores.score_type', 'event')
+          // Exclude events matching enabled normal behavior templates
+          .whereNotExists(
+            db('normal_behavior_templates as nbt')
+              .select(db.raw('1'))
+              .where('nbt.enabled', true)
+              .whereRaw('(nbt.system_id IS NULL OR nbt.system_id = events.system_id)')
+              .whereRaw('events.message ~* nbt.pattern')
+              .whereRaw('(nbt.host_pattern IS NULL OR events.host ~* nbt.host_pattern)')
+              .whereRaw('(nbt.program_pattern IS NULL OR events.program ~* nbt.program_pattern)'),
+          )
           .orderBy('event_scores.score', 'desc')
           .limit(limit)
           .select(
@@ -293,7 +303,17 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         .join('criteria', 'event_scores.criterion_id', 'criteria.id')
         .where('events.system_id', systemId)
         .where('events.timestamp', '>=', scoreSince)
-        .where('event_scores.score_type', 'event');
+        .where('event_scores.score_type', 'event')
+        // Exclude events matching enabled normal behavior templates at DB level
+        .whereNotExists(
+          db('normal_behavior_templates as nbt')
+            .select(db.raw('1'))
+            .where('nbt.enabled', true)
+            .whereRaw('(nbt.system_id IS NULL OR nbt.system_id = events.system_id)')
+            .whereRaw('events.message ~* nbt.pattern')
+            .whereRaw('(nbt.host_pattern IS NULL OR events.host ~* nbt.host_pattern)')
+            .whereRaw('(nbt.program_pattern IS NULL OR events.program ~* nbt.program_pattern)'),
+        );
 
       // By default hide acknowledged events; show them only when toggled on
       if (!showAcknowledged) {

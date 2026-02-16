@@ -9,7 +9,8 @@ import { localTimestamp } from '../../config/index.js';
 import { CRITERIA } from '../../types/index.js';
 import {
   generateNormalPattern,
-  patternToRegex,
+  ensureRegexPattern,
+  escapeRegex,
 } from '../pipeline/normalBehavior.js';
 
 /** Default meta-weight for effective score blending (must match metaAnalyze). */
@@ -28,6 +29,8 @@ async function retroactivelyApplyTemplate(
   db: Knex,
   patternRegex: string,
   systemId: string | null,
+  hostPattern?: string | null,
+  programPattern?: string | null,
 ): Promise<{ zeroedEvents: number; updatedWindows: number }> {
   // Use the configured score display window (default 7 days) instead of
   // a hardcoded 24h lookback. This ensures that events within the full
@@ -53,6 +56,12 @@ async function retroactivelyApplyTemplate(
 
   if (systemId) {
     subquery.where('system_id', systemId);
+  }
+  if (hostPattern) {
+    subquery.whereRaw('host ~* ?', [hostPattern]);
+  }
+  if (programPattern) {
+    subquery.whereRaw('program ~* ?', [programPattern]);
   }
 
   const zeroedEvents = await db('event_scores')
@@ -146,24 +155,29 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
   const db = getDb();
 
   /** Load an event by ID directly from the events table. */
-  async function loadEventById(eventId: string): Promise<{ id: string; message: string; system_id: string } | null> {
+  async function loadEventById(eventId: string): Promise<{
+    id: string; message: string; system_id: string;
+    host: string | null; program: string | null;
+  } | null> {
     const row = await db('events')
       .where({ id: eventId })
-      .select('id', 'message', 'system_id')
+      .select('id', 'message', 'system_id', 'host', 'program')
       .first();
     return row ?? null;
   }
 
   // ── Preview: generate pattern from event ───────────────────
   app.post<{
-    Body: { event_id?: string; message?: string };
+    Body: { event_id?: string; message?: string; host?: string; program?: string };
   }>(
     '/api/v1/normal-behavior-templates/preview',
     { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
     async (request, reply) => {
-      const { event_id, message } = request.body ?? {};
+      const { event_id, message, host, program } = request.body ?? {};
 
       let originalMessage: string;
+      let eventHost: string | null = host ?? null;
+      let eventProgram: string | null = program ?? null;
 
       if (event_id) {
         const event = await loadEventById(event_id);
@@ -171,17 +185,23 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
           return reply.code(404).send({ error: 'Event not found' });
         }
         originalMessage = event.message;
+        if (!eventHost) eventHost = event.host;
+        if (!eventProgram) eventProgram = event.program;
       } else if (message && typeof message === 'string') {
         originalMessage = message;
       } else {
         return reply.code(400).send({ error: 'Provide event_id or message' });
       }
 
-      const suggestedPattern = generateNormalPattern(originalMessage);
+      const generated = generateNormalPattern(originalMessage, eventHost, eventProgram);
 
       return reply.send({
         original_message: originalMessage,
-        suggested_pattern: suggestedPattern,
+        suggested_pattern: generated.pattern,
+        suggested_host_pattern: generated.host_pattern,
+        suggested_program_pattern: generated.program_pattern,
+        host: eventHost,
+        program: eventProgram,
       });
     },
   );
@@ -192,7 +212,11 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       event_id?: string;
       system_id?: string | null;
       pattern?: string;
+      host_pattern?: string | null;
+      program_pattern?: string | null;
       message?: string;
+      host?: string;
+      program?: string;
       notes?: string;
     };
   }>(
@@ -203,6 +227,8 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       const username = request.currentUser?.username ?? request.apiKey?.name ?? 'system';
 
       let pattern: string;
+      let hostPattern: string | null = body.host_pattern ?? null;
+      let programPattern: string | null = body.program_pattern ?? null;
       let originalMessage: string;
       let originalEventId: string | null = null;
       let systemId: string | null = body.system_id ?? null;
@@ -216,38 +242,72 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
         originalMessage = event.message;
         originalEventId = body.event_id;
         if (!systemId) systemId = event.system_id;
-        pattern = body.pattern ?? generateNormalPattern(originalMessage);
+
+        if (body.pattern) {
+          // User provided a custom regex pattern
+          pattern = body.pattern;
+        } else {
+          // Auto-generate regex from event message + metadata
+          const generated = generateNormalPattern(originalMessage, event.host, event.program);
+          pattern = generated.pattern;
+          if (hostPattern === null && generated.host_pattern) hostPattern = generated.host_pattern;
+          if (programPattern === null && generated.program_pattern) programPattern = generated.program_pattern;
+        }
       } else if (body.pattern) {
         pattern = body.pattern;
         originalMessage = body.message ?? body.pattern;
+        // Auto-generate host/program patterns from provided metadata
+        if (hostPattern === null && body.host) {
+          hostPattern = `^${escapeRegex(body.host)}$`;
+        }
+        if (programPattern === null && body.program) {
+          programPattern = `^${escapeRegex(body.program)}$`;
+        }
       } else {
         return reply.code(400).send({ error: 'Provide event_id or pattern' });
       }
 
-      // Validate pattern
+      // Validate message pattern
       const trimmedPattern = pattern.trim();
       if (!trimmedPattern) {
         return reply.code(400).send({ error: 'Pattern cannot be empty' });
       }
-      if (trimmedPattern.length > 2000) {
-        return reply.code(400).send({ error: 'Pattern is too long (max 2000 characters)' });
+      if (trimmedPattern.length > 4000) {
+        return reply.code(400).send({ error: 'Pattern is too long (max 4000 characters)' });
       }
 
-      // Compile and validate regex
-      let patternRegex: string;
+      // Ensure the pattern is proper regex (convert legacy wildcards if needed)
+      const patternRegex = ensureRegexPattern(trimmedPattern);
+
+      // Validate all regexes
       try {
-        patternRegex = patternToRegex(trimmedPattern);
-        new RegExp(patternRegex); // validate
+        new RegExp(patternRegex, 'i');
       } catch {
-        return reply.code(400).send({ error: 'Generated regex is invalid. Try simplifying the pattern.' });
+        return reply.code(400).send({ error: 'Invalid message pattern regex. Check syntax.' });
       }
+      if (hostPattern) {
+        try { new RegExp(hostPattern, 'i'); } catch {
+          return reply.code(400).send({ error: 'Invalid host pattern regex. Check syntax.' });
+        }
+      }
+      if (programPattern) {
+        try { new RegExp(programPattern, 'i'); } catch {
+          return reply.code(400).send({ error: 'Invalid program pattern regex. Check syntax.' });
+        }
+      }
+
+      // Normalise empty strings to null
+      if (hostPattern !== null && hostPattern.trim() === '') hostPattern = null;
+      if (programPattern !== null && programPattern.trim() === '') programPattern = null;
 
       const id = uuidv4();
       await db('normal_behavior_templates').insert({
         id,
         system_id: systemId,
-        pattern: trimmedPattern,
+        pattern: patternRegex,
         pattern_regex: patternRegex,
+        host_pattern: hostPattern,
+        program_pattern: programPattern,
         original_message: originalMessage,
         original_event_id: originalEventId,
         created_by: username,
@@ -260,7 +320,10 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
         action: 'normal_behavior_template_create',
         resource_type: 'normal_behavior_template',
         resource_id: id,
-        details: { pattern: trimmedPattern, system_id: systemId },
+        details: {
+          pattern: patternRegex, system_id: systemId,
+          host_pattern: hostPattern, program_pattern: programPattern,
+        },
         ip: request.ip,
         user_id: request.currentUser?.id,
         session_id: request.currentSession?.id,
@@ -268,14 +331,13 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
 
       const created = await db('normal_behavior_templates').where({ id }).first();
       console.log(
-        `[${localTimestamp()}] Normal behavior template created by ${username}: "${trimmedPattern}" (system=${systemId ?? 'global'})`,
+        `[${localTimestamp()}] Normal behavior template created by ${username}: regex (system=${systemId ?? 'global'}, host=${hostPattern ?? 'any'}, program=${programPattern ?? 'any'})`,
       );
 
       // Retroactively zero scores for matching events and recalculate effective scores.
-      // This is best-effort: template creation always succeeds even if retroactive update fails.
       let retroResult = { zeroedEvents: 0, updatedWindows: 0 };
       try {
-        retroResult = await retroactivelyApplyTemplate(db, patternRegex, systemId);
+        retroResult = await retroactivelyApplyTemplate(db, patternRegex, systemId, hostPattern, programPattern);
       } catch (err) {
         console.error(
           `[${localTimestamp()}] Retroactive score update failed (template ${id} still created): ${err instanceof Error ? err.message : String(err)}`,
@@ -323,6 +385,8 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
     Params: { id: string };
     Body: {
       pattern?: string;
+      host_pattern?: string | null;
+      program_pattern?: string | null;
       enabled?: boolean;
       notes?: string;
       system_id?: string | null;
@@ -346,17 +410,37 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
         if (!trimmed) {
           return reply.code(400).send({ error: 'Pattern cannot be empty' });
         }
-        if (trimmed.length > 2000) {
-          return reply.code(400).send({ error: 'Pattern is too long (max 2000 characters)' });
+        if (trimmed.length > 4000) {
+          return reply.code(400).send({ error: 'Pattern is too long (max 4000 characters)' });
         }
+        const regex = ensureRegexPattern(trimmed);
         try {
-          const regex = patternToRegex(trimmed);
-          new RegExp(regex); // validate
-          updates.pattern = trimmed;
-          updates.pattern_regex = regex;
+          new RegExp(regex, 'i');
         } catch {
-          return reply.code(400).send({ error: 'Generated regex is invalid. Try simplifying the pattern.' });
+          return reply.code(400).send({ error: 'Invalid message pattern regex. Check syntax.' });
         }
+        updates.pattern = regex;
+        updates.pattern_regex = regex;
+      }
+
+      if (body.host_pattern !== undefined) {
+        const hp = (typeof body.host_pattern === 'string' && body.host_pattern.trim()) ? body.host_pattern.trim() : null;
+        if (hp) {
+          try { new RegExp(hp, 'i'); } catch {
+            return reply.code(400).send({ error: 'Invalid host pattern regex. Check syntax.' });
+          }
+        }
+        updates.host_pattern = hp;
+      }
+
+      if (body.program_pattern !== undefined) {
+        const pp = (typeof body.program_pattern === 'string' && body.program_pattern.trim()) ? body.program_pattern.trim() : null;
+        if (pp) {
+          try { new RegExp(pp, 'i'); } catch {
+            return reply.code(400).send({ error: 'Invalid program pattern regex. Check syntax.' });
+          }
+        }
+        updates.program_pattern = pp;
       }
 
       if (body.enabled !== undefined) updates.enabled = body.enabled;

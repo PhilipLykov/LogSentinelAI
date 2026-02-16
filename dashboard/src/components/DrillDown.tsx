@@ -74,9 +74,13 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     eventId?: string;
     message: string;
     systemId?: string;
+    host?: string;
+    program?: string;
   } | null>(null);
   const [markOkPreview, setMarkOkPreview] = useState<NormalBehaviorPreview | null>(null);
   const [markOkPattern, setMarkOkPattern] = useState('');
+  const [markOkHostPattern, setMarkOkHostPattern] = useState('');
+  const [markOkProgramPattern, setMarkOkProgramPattern] = useState('');
   const [markOkLoading, setMarkOkLoading] = useState(false);
   const [markOkError, setMarkOkError] = useState('');
   const [markOkSuccess, setMarkOkSuccess] = useState('');
@@ -88,6 +92,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   // ── Proof event modal (for events not in the loaded list) ──
   const [proofEvent, setProofEvent] = useState<LogEvent | null>(null);
   const [proofEventLoading, setProofEventLoading] = useState(false);
+
+  // ── Event detail modal (from criterion drill-down) ──────
+  const [detailEvent, setDetailEvent] = useState<EventDetail | null>(null);
+  const [detailEventLoading, setDetailEventLoading] = useState(false);
+  const [detailEventNotFound, setDetailEventNotFound] = useState(false);
 
   // ── Per-group Ack state ──────────────────────────────────
   const [ackingGroupKey, setAckingGroupKey] = useState<string | null>(null);
@@ -103,18 +112,32 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
 
   // ── Normal behavior templates (for hiding "Mark OK" on already-matched events) ──
   const [normalTemplates, setNormalTemplates] = useState<NormalBehaviorTemplate[]>([]);
-  const normalRegexes = useRef<Array<{ regex: RegExp; id: string }>>([]);
+  const normalRegexes = useRef<Array<{
+    regex: RegExp; hostRegex: RegExp | null; programRegex: RegExp | null; id: string;
+  }>>([]);
+
+  /** Compile a set of normal-behavior templates into regex entries. */
+  function compileNormalTemplates(templates: NormalBehaviorTemplate[]) {
+    const compiled: Array<{
+      regex: RegExp; hostRegex: RegExp | null; programRegex: RegExp | null; id: string;
+    }> = [];
+    for (const t of templates) {
+      if (!t.enabled) continue;
+      try {
+        const regex = new RegExp(t.pattern_regex, 'i');
+        let hostRegex: RegExp | null = null;
+        let programRegex: RegExp | null = null;
+        if (t.host_pattern) try { hostRegex = new RegExp(t.host_pattern, 'i'); } catch { /* skip */ }
+        if (t.program_pattern) try { programRegex = new RegExp(t.program_pattern, 'i'); } catch { /* skip */ }
+        compiled.push({ regex, hostRegex, programRegex, id: t.id });
+      } catch { /* skip invalid regex */ }
+    }
+    return compiled;
+  }
 
   // Build compiled regexes when templates change
   useEffect(() => {
-    const compiled: Array<{ regex: RegExp; id: string }> = [];
-    for (const t of normalTemplates) {
-      if (!t.enabled) continue;
-      try {
-        compiled.push({ regex: new RegExp(t.pattern_regex, 'i'), id: t.id });
-      } catch { /* skip invalid regex */ }
-    }
-    normalRegexes.current = compiled;
+    normalRegexes.current = compileNormalTemplates(normalTemplates);
   }, [normalTemplates]);
 
   /**
@@ -126,15 +149,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     try {
       const templates = await fetchNormalBehaviorTemplates({ system_id: system.id, enabled: 'true' });
       setNormalTemplates(templates);
-      // Compile regexes immediately for the caller (avoids React render delay)
-      const compiled: Array<{ regex: RegExp; id: string }> = [];
-      for (const t of templates) {
-        if (!t.enabled) continue;
-        try {
-          compiled.push({ regex: new RegExp(t.pattern_regex, 'i'), id: t.id });
-        } catch { /* skip invalid regex */ }
-      }
-      normalRegexes.current = compiled;
+      normalRegexes.current = compileNormalTemplates(templates);
       return templates;
     } catch {
       return [];
@@ -155,9 +170,12 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   }, []);
 
   /** Check if a message matches any active normal-behavior template. */
-  const isNormalBehavior = useCallback((message: string): boolean => {
+  const isNormalBehavior = useCallback((message: string, host?: string, program?: string): boolean => {
     for (const entry of normalRegexes.current) {
-      if (entry.regex.test(message)) return true;
+      if (!entry.regex.test(message)) continue;
+      if (entry.hostRegex && !entry.hostRegex.test(host ?? '')) continue;
+      if (entry.programRegex && !entry.programRegex.test(program ?? '')) continue;
+      return true;
     }
     return false;
   }, []);
@@ -339,6 +357,125 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     }
   };
 
+  /** Build plain-text from an EventScoreRecord (criterion drill-down row). */
+  const scoreRecordToText = (ev: EventScoreRecord): string => {
+    const lines: string[] = [
+      `Event ID:    ${ev.event_id}`,
+      `Timestamp:   ${safeDate(ev.timestamp)}`,
+      `System:      ${system.name}`,
+      `Criterion:   ${ev.criterion_name} (${ev.criterion_slug})`,
+      `Score:       ${Math.round((Number(ev.score) || 0) * 100)}%`,
+      `Severity:    ${ev.severity ?? '—'}`,
+      `Host:        ${ev.host ?? '—'}`,
+      `Source IP:   ${ev.source_ip ?? '—'}`,
+      `Program:     ${ev.program ?? '—'}`,
+    ];
+    if (ev.reason_codes?.length) lines.push(`Reasons:     ${ev.reason_codes.join(', ')}`);
+    lines.push('', '--- Message ---', ev.message);
+    return lines.join('\n');
+  };
+
+  /** Build plain-text from a GroupedEventScoreRecord (criterion group row). */
+  const groupRecordToText = (grp: GroupedEventScoreRecord): string => {
+    const lines: string[] = [
+      `System:      ${system.name}`,
+      `Criterion:   ${grp.criterion_name} (${grp.criterion_slug})`,
+      `Score:       ${Math.round((Number(grp.score) || 0) * 100)}%`,
+      `Occurrences: ${grp.occurrence_count}`,
+      `First seen:  ${safeDate(grp.first_seen)}`,
+      `Last seen:   ${safeDate(grp.last_seen)}`,
+      `Severity:    ${grp.severity ?? '—'}`,
+      `Hosts:       ${grp.hosts.length > 0 ? grp.hosts.join(', ') : '—'}`,
+      `Source IPs:  ${grp.source_ips.length > 0 ? grp.source_ips.join(', ') : '—'}`,
+      `Program:     ${grp.program ?? '—'}`,
+    ];
+    if (grp.reason_codes?.length) lines.push(`Reasons:     ${grp.reason_codes.join(', ')}`);
+    lines.push('', '--- Message Pattern ---', grp.message);
+    return lines.join('\n');
+  };
+
+  /** Copy text to clipboard with fallback. */
+  const copyToClipboard = async (text: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopiedId(id);
+    setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 2000);
+  };
+
+  /** Open event detail modal — fetch full event by ID. */
+  const openEventDetail = useCallback(async (eventId: string) => {
+    setDetailEventLoading(true);
+    setDetailEvent(null);
+    setDetailEventNotFound(false);
+    try {
+      const res = await fetchEventsByIds([eventId]);
+      if (res.events.length > 0) {
+        setDetailEvent(res.events[0]);
+      } else {
+        setDetailEventNotFound(true);
+      }
+    } catch {
+      setDetailEventNotFound(true);
+    } finally {
+      setDetailEventLoading(false);
+    }
+  }, []);
+
+  /** Open event detail for a grouped row (single-event group).
+   *  Fetches the group's events first to obtain the real event_id. */
+  const openGroupEventDetail = useCallback(async (grp: GroupedEventScoreRecord) => {
+    setDetailEventLoading(true);
+    setDetailEvent(null);
+    setDetailEventNotFound(false);
+    const criterion = CRITERIA.find((c) => c.slug === grp.criterion_slug);
+    try {
+      const events = await fetchGroupedEventDetails(system.id, grp.group_key, {
+        criterion_id: criterion?.id,
+        limit: 1,
+      });
+      if (events.length > 0) {
+        const res = await fetchEventsByIds([events[0].event_id]);
+        if (res.events.length > 0) {
+          setDetailEvent(res.events[0]);
+        } else {
+          setDetailEventNotFound(true);
+        }
+      } else {
+        setDetailEventNotFound(true);
+      }
+    } catch {
+      setDetailEventNotFound(true);
+    } finally {
+      setDetailEventLoading(false);
+    }
+  }, [system.id]);
+
+  /** Build plain-text from an EventDetail for clipboard copy. */
+  const eventDetailToText = (ev: EventDetail): string => {
+    const lines: string[] = [
+      `Event ID:    ${ev.id}`,
+      `Timestamp:   ${safeDate(ev.timestamp)}`,
+      `System:      ${system.name}`,
+      `Severity:    ${ev.severity ?? '—'}`,
+      `Host:        ${ev.host ?? '—'}`,
+      `Source IP:   ${ev.source_ip ?? '—'}`,
+      `Program:     ${ev.program ?? '—'}`,
+    ];
+    if (ev.acknowledged_at) lines.push(`Acknowledged: ${safeDate(ev.acknowledged_at)}`);
+    lines.push('', '--- Message ---', ev.message);
+    return lines.join('\n');
+  };
+
   // ── Criterion click handler (grouped view) ─────────────
   const handleCriterionClick = useCallback(async (slug: string) => {
     if (selectedCriterion === slug) {
@@ -507,26 +644,36 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   }, [system.id, system.name]);
 
   // ── Mark as Normal Behavior ────────────────────────────
-  const openMarkOkModal = useCallback(async (eventIdOrUndef: string | undefined, message: string, systemId?: string) => {
-    setMarkOkModal({ eventId: eventIdOrUndef, message, systemId });
+  const openMarkOkModal = useCallback(async (
+    eventIdOrUndef: string | undefined,
+    message: string,
+    systemId?: string,
+    host?: string,
+    program?: string,
+  ) => {
+    setMarkOkModal({ eventId: eventIdOrUndef, message, systemId, host, program });
     setMarkOkPreview(null);
     setMarkOkPattern('');
+    setMarkOkHostPattern('');
+    setMarkOkProgramPattern('');
     setMarkOkError('');
     setMarkOkSuccess('');
     setMarkOkLoading(true);
     try {
-      // Use event_id when available (individual events), fall back to message (group rows)
       const preview = eventIdOrUndef
-        ? await previewNormalBehavior({ event_id: eventIdOrUndef })
-        : await previewNormalBehavior({ message });
+        ? await previewNormalBehavior({ event_id: eventIdOrUndef, host, program })
+        : await previewNormalBehavior({ message, host, program });
       setMarkOkPreview(preview);
       setMarkOkPattern(preview.suggested_pattern);
-    } catch (err: unknown) {
-      // Fallback: try message-based preview
+      setMarkOkHostPattern(preview.suggested_host_pattern ?? '');
+      setMarkOkProgramPattern(preview.suggested_program_pattern ?? '');
+    } catch {
       try {
-        const preview = await previewNormalBehavior({ message });
+        const preview = await previewNormalBehavior({ message, host, program });
         setMarkOkPreview(preview);
         setMarkOkPattern(preview.suggested_pattern);
+        setMarkOkHostPattern(preview.suggested_host_pattern ?? '');
+        setMarkOkProgramPattern(preview.suggested_program_pattern ?? '');
       } catch {
         setMarkOkError('Failed to generate pattern preview');
       }
@@ -544,7 +691,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         event_id: markOkModal.eventId,
         system_id: markOkModal.systemId ?? system.id,
         pattern: markOkPattern.trim(),
+        host_pattern: markOkHostPattern.trim() || null,
+        program_pattern: markOkProgramPattern.trim() || null,
         message: !markOkModal.eventId ? markOkModal.message : undefined,
+        host: markOkModal.host,
+        program: markOkModal.program,
       });
       setMarkOkSuccess('Template created. Scores recalculated. Future matching events will be treated as normal behavior.');
       setTimeout(() => {
@@ -552,12 +703,8 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         setMarkOkSuccess('');
       }, 2500);
 
-      // Reload normal-behavior templates and wait for completion before filtering.
-      // This eliminates the race condition where the filter runs before regexes
-      // are compiled from the newly fetched templates.
       await loadNormalTemplates();
 
-      // Refresh criterion drill-down data (event scores are now zeroed for matching events)
       if (selectedCriterion) {
         const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
         if (criterion) {
@@ -568,7 +715,6 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               min_score: 0.001,
               show_acknowledged: showAcknowledged,
             });
-            // isNormalBehavior uses the freshly compiled normalRegexes (set by loadNormalTemplates above)
             setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
             setExpandedGroup(null);
             setExpandedGroupEvents([]);
@@ -576,7 +722,6 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         }
       }
 
-      // Notify parent to refresh system scores on the dashboard
       onRefreshSystem?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -585,7 +730,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setMarkOkLoading(false);
     }
-  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates, isNormalBehavior, showAcknowledged]);
+  }, [markOkModal, markOkPattern, markOkHostPattern, markOkProgramPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates, isNormalBehavior, showAcknowledged]);
 
   // ── Re-evaluate meta-analysis handler ───────────────────
   const handleReEvaluate = useCallback(async () => {
@@ -1003,26 +1148,41 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                             </td>
                             <td>{grp.hosts.length > 0 ? grp.hosts.join(', ') : '—'}</td>
                             <td>{grp.program ?? '—'}</td>
-                            <td className="criterion-message-cell">{grp.message}</td>
+                            <td
+                              className={`criterion-message-cell${!hasMultiple ? ' criterion-message-clickable' : ''}`}
+                              onClick={!hasMultiple ? (ev) => { ev.stopPropagation(); openGroupEventDetail(grp); } : undefined}
+                              title={!hasMultiple ? 'Click to view full event details' : undefined}
+                            >
+                              {grp.message}
+                            </td>
                             {hasPermission(currentUser ?? null, 'events:acknowledge') && (
                               <td className="criterion-actions-cell">
                                 {grp.acknowledged ? (
-                                  <button
-                                    className="btn btn-xs btn-outline"
-                                    onClick={(ev) => { ev.stopPropagation(); handleUnackGroup(grp.group_key); }}
-                                    disabled={ackingGroupKey === grp.group_key}
-                                    title="Un-acknowledge this event group — events will be re-scored"
-                                  >
-                                    {ackingGroupKey === grp.group_key ? '…' : 'Un-ack'}
-                                  </button>
+                                  <>
+                                    <button
+                                      className="btn btn-xs btn-outline"
+                                      onClick={(ev) => { ev.stopPropagation(); handleUnackGroup(grp.group_key); }}
+                                      disabled={ackingGroupKey === grp.group_key}
+                                      title="Un-acknowledge this event group — events will be re-scored"
+                                    >
+                                      {ackingGroupKey === grp.group_key ? '…' : 'Un-ack'}
+                                    </button>
+                                    <button
+                                      className={`btn btn-xs ${copiedId === grp.group_key ? 'btn-success-outline' : 'btn-outline'}`}
+                                      onClick={(ev) => { ev.stopPropagation(); copyToClipboard(groupRecordToText(grp), grp.group_key); }}
+                                      title="Copy event group details to clipboard"
+                                    >
+                                      {copiedId === grp.group_key ? '✓' : 'Copy'}
+                                    </button>
+                                  </>
                                 ) : (
                                   <>
-                                    {isNormalBehavior(grp.message) ? (
+                                    {isNormalBehavior(grp.message, grp.hosts?.[0], grp.program ?? undefined) ? (
                                       <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
                                     ) : (
                                       <button
                                         className="btn btn-xs btn-mark-ok"
-                                        onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(undefined, grp.message, system.id); }}
+                                        onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(undefined, grp.message, system.id, grp.hosts?.[0], grp.program ?? undefined); }}
                                         title="Mark this event pattern as normal behavior"
                                       >
                                         Mark OK
@@ -1035,6 +1195,13 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                                       title="Acknowledge this event group — removes from score calculation"
                                     >
                                       {ackingGroupKey === grp.group_key ? '…' : 'Ack'}
+                                    </button>
+                                    <button
+                                      className={`btn btn-xs ${copiedId === grp.group_key ? 'btn-success-outline' : 'btn-outline'}`}
+                                      onClick={(ev) => { ev.stopPropagation(); copyToClipboard(groupRecordToText(grp), grp.group_key); }}
+                                      title="Copy event group details to clipboard"
+                                    >
+                                      {copiedId === grp.group_key ? '✓' : 'Copy'}
                                     </button>
                                   </>
                                 )}
@@ -1068,20 +1235,33 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                                   <td style={{ whiteSpace: 'nowrap' }}>{safeDate(ev.timestamp)}</td>
                                   <td>{ev.host ?? '—'}</td>
                                   <td>{ev.program ?? '—'}</td>
-                                  <td className="criterion-message-cell">{ev.message}</td>
+                                  <td
+                                    className="criterion-message-cell criterion-message-clickable"
+                                    onClick={() => openEventDetail(ev.event_id)}
+                                    title="Click to view full event details"
+                                  >
+                                    {ev.message}
+                                  </td>
                                   {hasPermission(currentUser ?? null, 'events:acknowledge') && (
                                     <td className="criterion-actions-cell">
-                                      {isNormalBehavior(ev.message) ? (
+                                      {isNormalBehavior(ev.message, ev.host ?? undefined, ev.program ?? undefined) ? (
                                         <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
                                       ) : (
                                         <button
                                           className="btn btn-xs btn-mark-ok"
-                                          onClick={() => openMarkOkModal(ev.event_id, ev.message, system.id)}
+                                          onClick={() => openMarkOkModal(ev.event_id, ev.message, system.id, ev.host ?? undefined, ev.program ?? undefined)}
                                           title="Mark this event pattern as normal behavior"
                                         >
                                           Mark OK
                                         </button>
                                       )}
+                                      <button
+                                        className={`btn btn-xs ${copiedId === ev.event_id ? 'btn-success-outline' : 'btn-outline'}`}
+                                        onClick={() => copyToClipboard(scoreRecordToText(ev), ev.event_id)}
+                                        title="Copy event details to clipboard"
+                                      >
+                                        {copiedId === ev.event_id ? '✓' : 'Copy'}
+                                      </button>
                                     </td>
                                   )}
                                 </tr>
@@ -1555,12 +1735,12 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                               {copiedId === e.id ? 'Copied!' : 'Copy Event'}
                             </button>
                             {hasPermission(currentUser ?? null, 'events:acknowledge') && (
-                              isNormalBehavior(e.message) ? (
+                              isNormalBehavior(e.message, e.host ?? undefined, e.program ?? undefined) ? (
                                 <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
                               ) : (
                                 <button
                                   className="btn btn-sm btn-mark-ok"
-                                  onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(e.id, e.message, system.id); }}
+                                  onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(e.id, e.message, system.id, e.host ?? undefined, e.program ?? undefined); }}
                                   title="Mark this event pattern as normal behavior — future similar events will be ignored by AI"
                                 >
                                   Mark OK
@@ -1636,12 +1816,56 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         </div>
       )}
 
+      {/* ── Event Detail Modal (from criterion drill-down) ── */}
+      {(detailEvent || detailEventLoading || detailEventNotFound) && (
+        <div className="modal-overlay" onClick={() => { if (!detailEventLoading) { setDetailEvent(null); setDetailEventNotFound(false); } }}>
+          <div className="modal-content event-detail-modal" onClick={(ev) => ev.stopPropagation()}>
+            <h3>Event Details</h3>
+            {detailEventLoading ? (
+              <div className="settings-loading"><div className="spinner" /> Loading event…</div>
+            ) : detailEvent ? (
+              <div className="proof-event-detail">
+                <table className="proof-event-table">
+                  <tbody>
+                    <tr><th>ID</th><td><code className="proof-event-id">{detailEvent.id}</code></td></tr>
+                    {detailEvent.timestamp && <tr><th>Time</th><td>{safeDate(detailEvent.timestamp)}</td></tr>}
+                    {detailEvent.severity && <tr><th>Severity</th><td><span className={`severity-badge ${detailEvent.severity.toLowerCase()}`}>{detailEvent.severity}</span></td></tr>}
+                    {detailEvent.host && <tr><th>Host</th><td>{detailEvent.host}</td></tr>}
+                    {detailEvent.source_ip && <tr><th>Source IP</th><td>{detailEvent.source_ip}</td></tr>}
+                    {detailEvent.program && <tr><th>Program</th><td>{detailEvent.program}</td></tr>}
+                    {detailEvent.acknowledged_at && <tr><th>Acknowledged</th><td>{safeDate(detailEvent.acknowledged_at)}</td></tr>}
+                  </tbody>
+                </table>
+                <div className="proof-event-message-block">
+                  <strong>Message:</strong>
+                  <pre className="proof-event-message">{detailEvent.message}</pre>
+                </div>
+              </div>
+            ) : (
+              <p className="text-secondary">Event not found.</p>
+            )}
+            <div className="modal-actions">
+              {detailEvent && (
+                <button
+                  className={`btn ${copiedId === `detail-${detailEvent.id}` ? 'btn-success-outline' : 'btn-outline'}`}
+                  onClick={() => copyToClipboard(eventDetailToText(detailEvent), `detail-${detailEvent.id}`)}
+                  title="Copy full event details to clipboard"
+                >
+                  {copiedId === `detail-${detailEvent.id}` ? 'Copied!' : 'Copy Event'}
+                </button>
+              )}
+              <button className="btn btn-outline" onClick={() => { setDetailEvent(null); setDetailEventNotFound(false); }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {markOkModal && (
         <div className="modal-overlay" onClick={() => !markOkLoading && setMarkOkModal(null)}>
           <div className="modal-content mark-ok-modal" onClick={(ev) => ev.stopPropagation()}>
             <h3>Mark as Normal Behavior</h3>
             <p className="mark-ok-description">
-              Future events matching this pattern will be treated as normal behavior
+              Future events matching these patterns will be treated as normal behavior
               and excluded from AI scoring and analysis.
             </p>
 
@@ -1657,7 +1881,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
             {markOkPreview && (
               <div className="mark-ok-pattern-section">
                 <label htmlFor="mark-ok-pattern-input">
-                  Pattern template (<code>*</code> = matches anything):
+                  Message pattern (regex):
                 </label>
                 <textarea
                   id="mark-ok-pattern-input"
@@ -1667,9 +1891,37 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                   rows={3}
                   disabled={markOkLoading}
                 />
+
+                <div className="mark-ok-filter-row">
+                  <div className="mark-ok-filter-field">
+                    <label htmlFor="mark-ok-host-input">Host pattern (regex, empty = any):</label>
+                    <input
+                      id="mark-ok-host-input"
+                      type="text"
+                      className="mark-ok-filter-input"
+                      value={markOkHostPattern}
+                      onChange={(ev) => setMarkOkHostPattern(ev.target.value)}
+                      disabled={markOkLoading}
+                      placeholder="e.g. ^myserver$"
+                    />
+                  </div>
+                  <div className="mark-ok-filter-field">
+                    <label htmlFor="mark-ok-program-input">Program pattern (regex, empty = any):</label>
+                    <input
+                      id="mark-ok-program-input"
+                      type="text"
+                      className="mark-ok-filter-input"
+                      value={markOkProgramPattern}
+                      onChange={(ev) => setMarkOkProgramPattern(ev.target.value)}
+                      disabled={markOkLoading}
+                      placeholder="e.g. ^postgres$"
+                    />
+                  </div>
+                </div>
+
                 <p className="mark-ok-hint">
-                  You can edit the pattern above. Use <code>*</code> for variable parts
-                  (ports, IPs, device names, numbers).
+                  Patterns use regex syntax: <code>\d+</code> = digits, <code>.*</code> = anything,
+                  <code>^...$</code> = exact match. Leave host/program empty to match all.
                 </p>
               </div>
             )}

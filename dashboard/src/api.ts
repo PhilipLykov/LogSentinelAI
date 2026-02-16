@@ -1793,6 +1793,8 @@ export interface NormalBehaviorTemplate {
   system_id: string | null;
   pattern: string;
   pattern_regex: string;
+  host_pattern: string | null;
+  program_pattern: string | null;
   original_message: string;
   original_event_id: string | null;
   created_by: string;
@@ -1804,10 +1806,14 @@ export interface NormalBehaviorTemplate {
 export interface NormalBehaviorPreview {
   original_message: string;
   suggested_pattern: string;
+  suggested_host_pattern: string | null;
+  suggested_program_pattern: string | null;
+  host: string | null;
+  program: string | null;
 }
 
 export async function previewNormalBehavior(
-  params: { event_id?: string; message?: string },
+  params: { event_id?: string; message?: string; host?: string; program?: string },
 ): Promise<NormalBehaviorPreview> {
   return apiFetch('/api/v1/normal-behavior-templates/preview', {
     method: 'POST',
@@ -1820,7 +1826,11 @@ export async function createNormalBehaviorTemplate(
     event_id?: string;
     system_id?: string | null;
     pattern?: string;
+    host_pattern?: string | null;
+    program_pattern?: string | null;
     message?: string;
+    host?: string;
+    program?: string;
     notes?: string;
   },
 ): Promise<NormalBehaviorTemplate> {
@@ -1842,7 +1852,14 @@ export async function fetchNormalBehaviorTemplates(
 
 export async function updateNormalBehaviorTemplate(
   id: string,
-  updates: { pattern?: string; enabled?: boolean; notes?: string | null; system_id?: string | null },
+  updates: {
+    pattern?: string;
+    host_pattern?: string | null;
+    program_pattern?: string | null;
+    enabled?: boolean;
+    notes?: string | null;
+    system_id?: string | null;
+  },
 ): Promise<NormalBehaviorTemplate> {
   return apiFetch(`/api/v1/normal-behavior-templates/${id}`, {
     method: 'PUT',

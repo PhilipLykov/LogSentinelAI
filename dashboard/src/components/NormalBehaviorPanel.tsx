@@ -16,6 +16,8 @@ export function NormalBehaviorPanel({ onAuthError }: NormalBehaviorPanelProps) {
   const [error, setError] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPattern, setEditPattern] = useState('');
+  const [editHostPattern, setEditHostPattern] = useState('');
+  const [editProgramPattern, setEditProgramPattern] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -51,6 +53,8 @@ export function NormalBehaviorPanel({ onAuthError }: NormalBehaviorPanelProps) {
   const handleStartEdit = useCallback((t: NormalBehaviorTemplate) => {
     setEditingId(t.id);
     setEditPattern(t.pattern);
+    setEditHostPattern(t.host_pattern ?? '');
+    setEditProgramPattern(t.program_pattern ?? '');
     setEditNotes(t.notes ?? '');
   }, []);
 
@@ -61,6 +65,8 @@ export function NormalBehaviorPanel({ onAuthError }: NormalBehaviorPanelProps) {
     try {
       const updated = await updateNormalBehaviorTemplate(editingId, {
         pattern: editPattern,
+        host_pattern: editHostPattern.trim() || null,
+        program_pattern: editProgramPattern.trim() || null,
         notes: editNotes.trim() || null,
       });
       setTemplates((prev) => prev.map((t) => (t.id === editingId ? updated : t)));
@@ -72,7 +78,7 @@ export function NormalBehaviorPanel({ onAuthError }: NormalBehaviorPanelProps) {
     } finally {
       setSaving(false);
     }
-  }, [editingId, editPattern, editNotes, onAuthError]);
+  }, [editingId, editPattern, editHostPattern, editProgramPattern, editNotes, onAuthError]);
 
   const handleDelete = useCallback(async (id: string) => {
     try {
@@ -137,7 +143,9 @@ export function NormalBehaviorPanel({ onAuthError }: NormalBehaviorPanelProps) {
             <thead>
               <tr>
                 <th>Enabled</th>
-                <th>Pattern</th>
+                <th>Pattern (regex)</th>
+                <th>Host</th>
+                <th>Program</th>
                 <th>Original Message</th>
                 <th>Created By</th>
                 <th>Created</th>
@@ -166,6 +174,32 @@ export function NormalBehaviorPanel({ onAuthError }: NormalBehaviorPanelProps) {
                       />
                     ) : (
                       <code className="nb-pattern-code">{t.pattern}</code>
+                    )}
+                  </td>
+                  <td className="nb-filter-cell">
+                    {editingId === t.id ? (
+                      <input
+                        type="text"
+                        className="nb-edit-filter"
+                        value={editHostPattern}
+                        onChange={(ev) => setEditHostPattern(ev.target.value)}
+                        placeholder="(any)"
+                      />
+                    ) : (
+                      <code className="nb-filter-code">{t.host_pattern ?? <span className="nb-any">(any)</span>}</code>
+                    )}
+                  </td>
+                  <td className="nb-filter-cell">
+                    {editingId === t.id ? (
+                      <input
+                        type="text"
+                        className="nb-edit-filter"
+                        value={editProgramPattern}
+                        onChange={(ev) => setEditProgramPattern(ev.target.value)}
+                        placeholder="(any)"
+                      />
+                    ) : (
+                      <code className="nb-filter-code">{t.program_pattern ?? <span className="nb-any">(any)</span>}</code>
                     )}
                   </td>
                   <td className="nb-original-cell" title={t.original_message}>

@@ -631,6 +631,16 @@ input:focus-visible,
   white-space: normal;
   word-break: break-word;
 }
+.criterion-message-clickable {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.criterion-message-clickable:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
 
 .criterion-actions-cell .btn-mark-ok {
   font-size: 0.72rem;
@@ -5669,6 +5679,22 @@ tr.event-row-acked:hover {
   overflow-y: auto;
 }
 
+/* Event Detail Modal (from criterion drill-down) */
+.event-detail-modal {
+  max-width: 700px;
+}
+.event-detail-modal h3 {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 1.1rem;
+}
+.event-detail-modal .modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
 /* Mark OK Modal */
 .mark-ok-modal {
   max-width: 600px;
@@ -5744,6 +5770,37 @@ tr.event-row-acked:hover {
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 0.8rem;
+}
+.mark-ok-filter-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+.mark-ok-filter-field {
+  flex: 1;
+  min-width: 0;
+}
+.mark-ok-filter-field label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+  font-weight: 600;
+}
+.mark-ok-filter-input {
+  width: 100%;
+  background: var(--bg-surface, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.82rem;
+  color: var(--text);
+  box-sizing: border-box;
+}
+.mark-ok-filter-input:focus {
+  border-color: var(--accent, #3b82f6);
+  outline: none;
 }
 .mark-ok-actions {
   display: flex;
@@ -5823,6 +5880,31 @@ tr.event-row-acked:hover {
   background: rgba(255, 255, 255, 0.05);
   padding: 2px 6px;
   border-radius: 3px;
+}
+.nb-filter-cell {
+  max-width: 160px;
+}
+.nb-filter-code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+.nb-any {
+  color: var(--text-muted);
+  font-style: italic;
+  font-family: inherit;
+}
+.nb-edit-filter {
+  width: 100%;
+  min-width: 90px;
+  background: var(--bg-surface, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.78rem;
+  color: var(--text);
+  box-sizing: border-box;
 }
 .nb-original-cell {
   max-width: 250px;

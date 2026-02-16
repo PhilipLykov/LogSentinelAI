@@ -73,6 +73,14 @@ async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: str
             AND e.acknowledged_at IS NULL
             AND es.criterion_id = eff.criterion_id
             AND es.score_type = 'event'
+            AND NOT EXISTS (
+              SELECT 1 FROM normal_behavior_templates nbt
+              WHERE nbt.enabled = true
+                AND (nbt.system_id IS NULL OR nbt.system_id = e.system_id)
+                AND e.message ~* nbt.pattern
+                AND (nbt.host_pattern IS NULL OR e.host ~* nbt.host_pattern)
+                AND (nbt.program_pattern IS NULL OR e.program ~* nbt.program_pattern)
+            )
           UNION ALL
           -- ES events path (metadata tracked in es_event_metadata)
           SELECT es.score
