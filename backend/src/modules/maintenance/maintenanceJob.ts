@@ -389,33 +389,36 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
   }
 
   // ── 3. REINDEX ────────────────────────────────────────────
+  // Dynamically discover indexes on key tables rather than hardcoding names.
+  // This avoids PostgreSQL errors when indexes don't exist (e.g. partitioned
+  // tables have per-partition indexes with auto-generated names).
   try {
-    const indexes = [
-      'idx_events_system_ts',
-      'idx_events_template',
-      'idx_event_scores_event',
-      'idx_findings_fingerprint',
-      'idx_findings_open_system',
-    ];
+    const targetTables = ['events', 'event_scores', 'findings', 'message_templates', 'meta_results'];
+    const idxResult = await db.raw(`
+      SELECT indexname FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = ANY(?)
+        AND indexname NOT LIKE '%_pkey'
+      ORDER BY tablename, indexname
+    `, [targetTables]);
+    const indexes: string[] = (idxResult.rows ?? []).map((r: { indexname: string }) => r.indexname);
+    let reindexedCount = 0;
     for (const idx of indexes) {
       try {
-        await db.raw(`REINDEX INDEX CONCURRENTLY ${idx}`);
+        await db.raw(`REINDEX INDEX CONCURRENTLY "${idx}"`);
+        reindexedCount++;
       } catch (err: any) {
-        // Index might not exist — that's OK
-        if (!err.message.includes('does not exist')) {
-          // REINDEX CONCURRENTLY requires PG 12+; fall back to regular REINDEX
-          try {
-            await db.raw(`REINDEX INDEX ${idx}`);
-          } catch (err2: any) {
-            if (!err2.message.includes('does not exist')) {
-              errors.push(`REINDEX ${idx} failed: ${err2.message}`);
-            }
-          }
+        // REINDEX CONCURRENTLY requires PG 12+; fall back to regular REINDEX
+        try {
+          await db.raw(`REINDEX INDEX "${idx}"`);
+          reindexedCount++;
+        } catch (err2: any) {
+          errors.push(`REINDEX ${idx} failed: ${err2.message}`);
         }
       }
     }
     reindexRan = true;
-    console.log(`[${localTimestamp()}] Maintenance: REINDEX completed`);
+    console.log(`[${localTimestamp()}] Maintenance: REINDEX completed (${reindexedCount}/${indexes.length} indexes)`);
   } catch (err: any) {
     const msg = `REINDEX failed: ${err.message}`;
     console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
