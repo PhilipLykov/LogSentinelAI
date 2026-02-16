@@ -371,7 +371,7 @@ export interface DashboardSystem {
   event_count_24h: number;
   latest_window: { id: string; from: string; to: string } | null;
   scores: Record<string, SystemScoreInfo>;
-  /** Active findings summary — present when the system has open/acknowledged findings. */
+  /** Active findings summary — present when the system has open (unhandled) findings. */
   active_findings?: ActiveFindingsCounts;
   updated_at: string;
 }

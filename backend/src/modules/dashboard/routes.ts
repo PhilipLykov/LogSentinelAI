@@ -98,10 +98,10 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         const sysEventSource = getEventSource(system, db);
         const eventCount24h = await sysEventSource.countSystemEvents(system.id, since24h);
 
-        // Active findings count by severity (open + acknowledged)
+        // Active findings count by severity (open only — acknowledged have been handled)
         const findingRows = await db('findings')
           .where({ system_id: system.id })
-          .whereIn('status', ['open', 'acknowledged'])
+          .where('status', 'open')
           .groupBy('severity')
           .select('severity', db.raw('COUNT(*) as cnt'));
 
