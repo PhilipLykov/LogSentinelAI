@@ -242,7 +242,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
   //    showing a wall of duplicate events.
   app.get<{
     Params: { systemId: string };
-    Querystring: { criterion_id?: string; limit?: string; min_score?: string };
+    Querystring: { criterion_id?: string; limit?: string; min_score?: string; show_acknowledged?: string };
   }>(
     '/api/v1/systems/:systemId/event-scores/grouped',
     { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
@@ -252,6 +252,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       const rawLimit = Number(request.query.limit ?? 30);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 100) : 30;
       const minScore = Number(request.query.min_score ?? 0);
+      const showAcknowledged = request.query.show_acknowledged === 'true';
 
       const system = await db('monitored_systems').where({ id: systemId }).first();
       if (!system) return reply.code(404).send({ error: 'System not found' });
@@ -275,7 +276,14 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         .joinRaw('JOIN events ON event_scores.event_id = events.id::text')
         .join('criteria', 'event_scores.criterion_id', 'criteria.id')
         .where('events.system_id', systemId)
-        .where('event_scores.score_type', 'event')
+        .where('event_scores.score_type', 'event');
+
+      // By default hide acknowledged events; show them only when toggled on
+      if (!showAcknowledged) {
+        groupQuery.whereNull('events.acknowledged_at');
+      }
+
+      groupQuery
         .groupByRaw(`
           COALESCE(events.template_id::text, events.id::text),
           events.message,
@@ -310,6 +318,13 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         groupQuery.havingRaw('MAX(event_scores.score) >= ?', [minScore]);
       }
 
+      // When showing acknowledged events, add a flag to each group
+      if (showAcknowledged) {
+        groupQuery.select(
+          db.raw('BOOL_OR(events.acknowledged_at IS NOT NULL) as acknowledged'),
+        );
+      }
+
       const rows = await groupQuery;
 
       // Parse reason_codes JSON safely
@@ -333,6 +348,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
           last_seen: r.last_seen,
           hosts: Array.isArray(r.hosts) ? r.hosts.filter(Boolean) : [],
           source_ips: Array.isArray(r.source_ips) ? r.source_ips.filter(Boolean) : [],
+          ...(showAcknowledged ? { acknowledged: !!r.acknowledged } : {}),
         };
       });
 

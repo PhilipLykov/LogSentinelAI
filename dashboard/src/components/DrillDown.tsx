@@ -22,6 +22,10 @@ import {
   type NormalBehaviorTemplate,
   type NormalBehaviorPreview,
   fetchDashboardConfig,
+  acknowledgeEventGroup,
+  unacknowledgeEventGroup,
+  fetchEventsByIds,
+  type EventDetail,
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
@@ -85,6 +89,15 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   const [proofEvent, setProofEvent] = useState<LogEvent | null>(null);
   const [proofEventLoading, setProofEventLoading] = useState(false);
 
+  // ── Per-group Ack state ──────────────────────────────────
+  const [ackingGroupKey, setAckingGroupKey] = useState<string | null>(null);
+  const [showAcknowledged, setShowAcknowledged] = useState(false);
+
+  // ── Finding proof events (Show Events) ───────────────────
+  const [findingProofEvents, setFindingProofEvents] = useState<EventDetail[]>([]);
+  const [findingProofLoading, setFindingProofLoading] = useState<string | null>(null);
+  const [findingProofShown, setFindingProofShown] = useState<string | null>(null);
+
   // ── Dashboard config (score display window label) ─────
   const [scoreWindowDays, setScoreWindowDays] = useState(7);
 
@@ -104,10 +117,28 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     normalRegexes.current = compiled;
   }, [normalTemplates]);
 
-  const loadNormalTemplates = useCallback(() => {
-    fetchNormalBehaviorTemplates({ system_id: system.id, enabled: 'true' })
-      .then(setNormalTemplates)
-      .catch(() => { /* ignore — Mark OK visibility is best-effort */ });
+  /**
+   * Loads normal-behavior templates and compiles regexes.
+   * Returns the fetched templates so callers can use them immediately
+   * without waiting for a React re-render cycle.
+   */
+  const loadNormalTemplates = useCallback(async (): Promise<NormalBehaviorTemplate[]> => {
+    try {
+      const templates = await fetchNormalBehaviorTemplates({ system_id: system.id, enabled: 'true' });
+      setNormalTemplates(templates);
+      // Compile regexes immediately for the caller (avoids React render delay)
+      const compiled: Array<{ regex: RegExp; id: string }> = [];
+      for (const t of templates) {
+        if (!t.enabled) continue;
+        try {
+          compiled.push({ regex: new RegExp(t.pattern_regex, 'i'), id: t.id });
+        } catch { /* skip invalid regex */ }
+      }
+      normalRegexes.current = compiled;
+      return templates;
+    } catch {
+      return [];
+    }
   }, [system.id]);
 
   useEffect(() => { loadNormalTemplates(); }, [loadNormalTemplates]);
@@ -337,6 +368,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         criterion_id: criterion.id,
         limit: 50,
         min_score: 0.001,
+        show_acknowledged: showAcknowledged,
       });
       // Filter out events already marked as normal behavior (defense-in-depth:
       // scores may not be zeroed yet if retroactive update didn't match)
@@ -351,7 +383,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setCriterionLoading(false);
     }
-  }, [selectedCriterion, system.id, isNormalBehavior]);
+  }, [selectedCriterion, system.id, isNormalBehavior, showAcknowledged]);
 
   // ── Expand a grouped row to show individual events ─────
   const handleExpandGroup = useCallback(async (groupKey: string) => {
@@ -520,21 +552,23 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         setMarkOkSuccess('');
       }, 2500);
 
-      // Reload normal-behavior templates so the "Mark OK" button hides for matching events
-      loadNormalTemplates();
+      // Reload normal-behavior templates and wait for completion before filtering.
+      // This eliminates the race condition where the filter runs before regexes
+      // are compiled from the newly fetched templates.
+      await loadNormalTemplates();
 
       // Refresh criterion drill-down data (event scores are now zeroed for matching events)
       if (selectedCriterion) {
         const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
         if (criterion) {
           try {
-            // Wait briefly for the backend retroactive score zeroing to complete
-            // before refreshing, then filter out any remaining normal-behavior events
             const data = await fetchGroupedEventScores(system.id, {
               criterion_id: criterion.id,
               limit: 50,
               min_score: 0.001,
+              show_acknowledged: showAcknowledged,
             });
+            // isNormalBehavior uses the freshly compiled normalRegexes (set by loadNormalTemplates above)
             setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
             setExpandedGroup(null);
             setExpandedGroupEvents([]);
@@ -551,7 +585,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setMarkOkLoading(false);
     }
-  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates, isNormalBehavior]);
+  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates, isNormalBehavior, showAcknowledged]);
 
   // ── Re-evaluate meta-analysis handler ───────────────────
   const handleReEvaluate = useCallback(async () => {
@@ -576,6 +610,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               criterion_id: criterion.id,
               limit: 50,
               min_score: 0.001,
+              show_acknowledged: showAcknowledged,
             });
             setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
             setExpandedGroup(null);
@@ -603,7 +638,89 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setReEvalLoading(false);
     }
-  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem, loadFindings, isNormalBehavior]);
+  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem, loadFindings, isNormalBehavior, showAcknowledged]);
+
+  // ── Per-group Ack handler ───────────────────────────────
+  const handleAckGroup = useCallback(async (groupKey: string) => {
+    if (ackingGroupKey) return;
+    setAckingGroupKey(groupKey);
+    try {
+      await acknowledgeEventGroup({ system_id: system.id, group_key: groupKey });
+      // Remove the group from the list or mark it as acknowledged
+      if (!showAcknowledged) {
+        setCriterionGroups((prev) => prev.filter((g) => g.group_key !== groupKey));
+      } else {
+        setCriterionGroups((prev) =>
+          prev.map((g) => (g.group_key === groupKey ? { ...g, acknowledged: true } : g)),
+        );
+      }
+      // Refresh scores and findings
+      onRefreshSystem?.();
+      loadFindings();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      alert(`Ack failed: ${msg}`);
+    } finally {
+      setAckingGroupKey(null);
+    }
+  }, [ackingGroupKey, system.id, showAcknowledged, onRefreshSystem, loadFindings]);
+
+  // ── Per-group Un-ack handler ───────────────────────────
+  const handleUnackGroup = useCallback(async (groupKey: string) => {
+    if (ackingGroupKey) return;
+    setAckingGroupKey(groupKey);
+    try {
+      await unacknowledgeEventGroup({ system_id: system.id, group_key: groupKey });
+      // Refresh the criterion drill-down
+      if (selectedCriterion) {
+        const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
+        if (criterion) {
+          try {
+            const data = await fetchGroupedEventScores(system.id, {
+              criterion_id: criterion.id,
+              limit: 50,
+              min_score: 0.001,
+              show_acknowledged: showAcknowledged,
+            });
+            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+          } catch { /* ignore */ }
+        }
+      }
+      onRefreshSystem?.();
+      loadFindings();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      alert(`Un-ack failed: ${msg}`);
+    } finally {
+      setAckingGroupKey(null);
+    }
+  }, [ackingGroupKey, system.id, selectedCriterion, showAcknowledged, onRefreshSystem, loadFindings, isNormalBehavior]);
+
+  // ── Show Events for a finding (fetch by key_event_ids) ──
+  const handleShowFindingEvents = useCallback(async (findingId: string, keyEventIds: string[]) => {
+    // Toggle off if already showing this finding's events
+    if (findingProofShown === findingId) {
+      setFindingProofShown(null);
+      setFindingProofEvents([]);
+      return;
+    }
+    setFindingProofLoading(findingId);
+    setFindingProofShown(findingId);
+    setFindingProofEvents([]);
+    try {
+      const resp = await fetchEventsByIds(keyEventIds.slice(0, 50));
+      setFindingProofEvents(resp.events);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      setFindingProofShown(null);
+      alert(`Failed to load events: ${msg}`);
+    } finally {
+      setFindingProofLoading(null);
+    }
+  }, [findingProofShown]);
 
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');
@@ -685,6 +802,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         >
           <span className="active-issues-count">
             {activeFindings.length} active issue{activeFindings.length !== 1 ? 's' : ''}
+            {openFindings.length > 0 && ackedFindings.length > 0 && (
+              <span className="active-issues-detail">
+                {' '}({openFindings.length} open, {ackedFindings.length} ack'd)
+              </span>
+            )}
           </span>
           <span className="active-issues-breakdown">
             {(['critical', 'high', 'medium', 'low', 'info'] as const)
@@ -727,14 +849,38 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               </h4>
               <div className="criterion-drilldown-actions">
                 {hasPermission(currentUser ?? null, 'events:acknowledge') && (
-                  <button
-                    className="btn btn-xs btn-primary"
-                    onClick={handleReEvaluate}
-                    disabled={reEvalLoading}
-                    title="Re-run AI meta-analysis on recent events (excludes events marked as normal behavior)"
-                  >
-                    {reEvalLoading ? 'Analyzing…' : 'Re-evaluate'}
-                  </button>
+                  <>
+                    <label className="show-acked-toggle" title="Show acknowledged events (muted)">
+                      <input
+                        type="checkbox"
+                        checked={showAcknowledged}
+                        onChange={(e) => {
+                          setShowAcknowledged(e.target.checked);
+                          // Re-fetch with the new toggle
+                          const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
+                          if (criterion) {
+                            fetchGroupedEventScores(system.id, {
+                              criterion_id: criterion.id,
+                              limit: 50,
+                              min_score: 0.001,
+                              show_acknowledged: e.target.checked,
+                            }).then((data) => {
+                              setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+                            }).catch(() => { /* ignore */ });
+                          }
+                        }}
+                      />
+                      Show ack'd
+                    </label>
+                    <button
+                      className="btn btn-xs btn-primary"
+                      onClick={handleReEvaluate}
+                      disabled={reEvalLoading}
+                      title="Re-run AI meta-analysis on recent events (excludes events marked as normal behavior)"
+                    >
+                      {reEvalLoading ? 'Analyzing…' : 'Re-evaluate'}
+                    </button>
+                  </>
                 )}
                 <button
                   className="btn btn-xs btn-outline"
@@ -817,7 +963,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                       return (
                         <Fragment key={grp.group_key}>
                           <tr
-                            className={`criterion-event-row criterion-group-row${isExpanded ? ' criterion-group-expanded' : ''}${hasMultiple ? ' criterion-group-clickable' : ''}`}
+                            className={`criterion-event-row criterion-group-row${isExpanded ? ' criterion-group-expanded' : ''}${hasMultiple ? ' criterion-group-clickable' : ''}${grp.acknowledged ? ' group-acknowledged' : ''}`}
                             onClick={hasMultiple ? () => handleExpandGroup(grp.group_key) : undefined}
                             style={hasMultiple ? { cursor: 'pointer' } : undefined}
                             title={hasMultiple ? (isExpanded ? 'Click to collapse' : `Click to see all ${grp.occurrence_count} events`) : undefined}
@@ -860,16 +1006,37 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                             <td className="criterion-message-cell">{grp.message}</td>
                             {hasPermission(currentUser ?? null, 'events:acknowledge') && (
                               <td className="criterion-actions-cell">
-                                {isNormalBehavior(grp.message) ? (
-                                  <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
-                                ) : (
+                                {grp.acknowledged ? (
                                   <button
-                                    className="btn btn-xs btn-mark-ok"
-                                    onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(undefined, grp.message, system.id); }}
-                                    title="Mark this event pattern as normal behavior"
+                                    className="btn btn-xs btn-outline"
+                                    onClick={(ev) => { ev.stopPropagation(); handleUnackGroup(grp.group_key); }}
+                                    disabled={ackingGroupKey === grp.group_key}
+                                    title="Un-acknowledge this event group — events will be re-scored"
                                   >
-                                    Mark OK
+                                    {ackingGroupKey === grp.group_key ? '…' : 'Un-ack'}
                                   </button>
+                                ) : (
+                                  <>
+                                    {isNormalBehavior(grp.message) ? (
+                                      <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
+                                    ) : (
+                                      <button
+                                        className="btn btn-xs btn-mark-ok"
+                                        onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(undefined, grp.message, system.id); }}
+                                        title="Mark this event pattern as normal behavior"
+                                      >
+                                        Mark OK
+                                      </button>
+                                    )}
+                                    <button
+                                      className="btn btn-xs btn-ack-group"
+                                      onClick={(ev) => { ev.stopPropagation(); handleAckGroup(grp.group_key); }}
+                                      disabled={ackingGroupKey === grp.group_key}
+                                      title="Acknowledge this event group — removes from score calculation"
+                                    >
+                                      {ackingGroupKey === grp.group_key ? '…' : 'Ack'}
+                                    </button>
+                                  </>
                                 )}
                               </td>
                             )}
@@ -1180,7 +1347,35 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                           Resolved by AI {safeDate(f.resolved_at)}
                         </span>
                       )}
+                      {/* Show Events button — available on all finding statuses when key_event_ids exist */}
+                      {f.key_event_ids && f.key_event_ids.length > 0 && (
+                        <button
+                          className={`btn btn-xs btn-outline${findingProofShown === f.id ? ' btn-active' : ''}`}
+                          onClick={() => handleShowFindingEvents(f.id, f.key_event_ids!)}
+                          disabled={findingProofLoading === f.id}
+                          title={findingProofShown === f.id ? 'Hide source events' : 'Show the source events that contributed to this finding'}
+                        >
+                          {findingProofLoading === f.id ? 'Loading\u2026' : findingProofShown === f.id ? 'Hide Events' : `Show Events (${f.key_event_ids.length})`}
+                        </button>
+                      )}
                     </div>
+                    {/* Proof events panel — scoped to this finding only */}
+                    {findingProofShown === f.id && findingProofEvents.length > 0 && (
+                      <div className="finding-proof-events">
+                        <div className="finding-proof-events-list">
+                          <h5>Source Events</h5>
+                          {findingProofEvents.map((ev) => (
+                            <div key={ev.id} className="finding-proof-event">
+                              <span className="proof-event-time">{safeDate(ev.timestamp)}</span>
+                              <span className={`severity-badge ${(ev.severity || 'info').toLowerCase()}`}>{ev.severity || 'info'}</span>
+                              <span className="proof-event-host">{ev.host || '\u2014'}</span>
+                              <span className="proof-event-program">{ev.program || '\u2014'}</span>
+                              <span className="proof-event-message">{ev.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

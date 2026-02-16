@@ -98,7 +98,13 @@ function matchesSelector(event: NormalizedEvent, selector: LogSourceSelector): b
       eventValue = event.raw[key];
     }
 
-    if (eventValue === undefined || eventValue === null) return false;
+    if (eventValue === undefined || eventValue === null) {
+      // Universal wildcard patterns match even missing fields (catch-all support).
+      // Without this, a catch-all like {"host": ".*"} fails for events that lack a host field.
+      const pat = String(pattern);
+      if (pat === '.*' || pat === '^.*$' || pat === '.+' || pat === '^.+$') continue;
+      return false;
+    }
 
     const ev = String(eventValue);
 

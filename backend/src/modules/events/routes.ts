@@ -6,6 +6,116 @@ import { localTimestamp } from '../../config/index.js';
 import { invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { writeAuditLog } from '../../middleware/audit.js';
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
+import { CRITERIA } from '../../types/index.js';
+
+/** Default meta-weight for effective score blending (must match metaAnalyze). */
+const DEFAULT_W_META = 0.7;
+
+/**
+ * Recalculate effective_scores for recent windows belonging to a system.
+ * Called after ack/unack to ensure the score bars reflect the change immediately.
+ */
+async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: string | null): Promise<number> {
+  let windowDays = 7;
+  try {
+    const cfgRow = await db('app_config').where({ key: 'dashboard_config' }).first('value');
+    if (cfgRow?.value) {
+      const parsed = typeof cfgRow.value === 'string' ? JSON.parse(cfgRow.value) : cfgRow.value;
+      const d = Number(parsed.score_display_window_days);
+      if (d > 0 && d <= 90) windowDays = d;
+    }
+  } catch { /* use default */ }
+
+  const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
+  const windowQuery = db('windows').where('to_ts', '>=', since).select('id', 'system_id', 'from_ts', 'to_ts');
+  if (systemId) windowQuery.where('system_id', systemId);
+  const windows = await windowQuery;
+  let updated = 0;
+
+  for (const w of windows) {
+    let windowUpdated = false;
+    for (const criterion of CRITERIA) {
+      const existing = await db('effective_scores')
+        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
+        .first();
+      if (!existing) continue;
+
+      // Recalculate max_event_score from un-acknowledged events only
+      const windowEventIds = db('events')
+        .select(db.raw('id::text'))
+        .where('system_id', w.system_id)
+        .where('timestamp', '>=', w.from_ts)
+        .where('timestamp', '<=', w.to_ts)
+        .whereNull('acknowledged_at');
+
+      const maxRow = await db('event_scores')
+        .whereIn('event_id', windowEventIds)
+        .where({ criterion_id: criterion.id })
+        .max('score as max_score')
+        .first();
+
+      const newMaxEvent = Number(maxRow?.max_score ?? 0);
+      let metaScore = Number(existing.meta_score) || 0;
+      if (newMaxEvent === 0) metaScore = 0;
+
+      const newEffective = DEFAULT_W_META * metaScore + (1 - DEFAULT_W_META) * newMaxEvent;
+      await db('effective_scores')
+        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
+        .update({
+          meta_score: metaScore,
+          max_event_score: newMaxEvent,
+          effective_value: newEffective,
+          updated_at: new Date().toISOString(),
+        });
+      windowUpdated = true;
+    }
+    if (windowUpdated) updated++;
+  }
+  return updated;
+}
+
+/**
+ * Transition open findings to 'acknowledged' status when their text
+ * significantly overlaps with acknowledged event messages.
+ */
+async function transitionFindingsOnAck(
+  db: ReturnType<typeof getDb>,
+  systemId: string | null,
+  ackedMessages: string[],
+): Promise<number> {
+  if (ackedMessages.length === 0) return 0;
+
+  // Find open findings for the system
+  const findingsQuery = db('findings').where('status', 'open');
+  if (systemId) findingsQuery.where('system_id', systemId);
+  const openFindings = await findingsQuery.select('id', 'title', 'description');
+
+  let transitioned = 0;
+  for (const finding of openFindings) {
+    const findingText = `${finding.title || ''} ${finding.description || ''}`.toLowerCase();
+    // Check if any acknowledged message text significantly matches
+    const match = ackedMessages.some((msg) => {
+      const m = msg.toLowerCase();
+      // Simple keyword overlap: if ≥50% of significant words (4+ chars) overlap, transition
+      const msgWords = m.split(/\s+/).filter((w: string) => w.length >= 4);
+      if (msgWords.length === 0) return false;
+      let overlap = 0;
+      for (const w of msgWords) {
+        if (findingText.includes(w)) overlap++;
+      }
+      return msgWords.length > 0 && overlap / msgWords.length >= 0.5;
+    });
+
+    if (match) {
+      await db('findings').where('id', finding.id).update({
+        status: 'acknowledged',
+        updated_at: new Date().toISOString(),
+      });
+      transitioned++;
+    }
+  }
+  return transitioned;
+}
 
 /**
  * Event search, facet, and trace endpoints.
@@ -205,15 +315,40 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           return reply.send({ acknowledged: 0, message: 'No events to acknowledge in the given range.' });
         }
 
+        // Recalculate effective_scores so dashboard reflects the change immediately
+        let updatedWindows = 0;
+        try {
+          updatedWindows = await recalcEffectiveScores(db, system_id || null);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after ack failed: ${err.message}`);
+        }
+
+        // Transition related open findings to 'acknowledged' status
+        let transitionedFindings = 0;
+        try {
+          // Get the messages of the acknowledged events for matching
+          let msgQuery = db('events')
+            .whereNotNull('acknowledged_at')
+            .where('timestamp', '<=', toTs);
+          if (fromTs) msgQuery = msgQuery.where('timestamp', '>=', fromTs);
+          if (system_id) msgQuery = msgQuery.where('system_id', system_id);
+          const ackedRows = await msgQuery.distinct('message').limit(500);
+          const ackedMsgs = ackedRows.map((r: any) => String(r.message || ''));
+          transitionedFindings = await transitionFindingsOnAck(db, system_id || null, ackedMsgs);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Finding transition after ack failed: ${err.message}`);
+        }
+
         app.log.info(
           `[${localTimestamp()}] Bulk event acknowledgement: ${totalAcked} events` +
-          `${system_id ? ` (system=${system_id})` : ''}, range=${fromTs ?? 'beginning'}..${toTs}`,
+          `${system_id ? ` (system=${system_id})` : ''}, range=${fromTs ?? 'beginning'}..${toTs}` +
+          `, ${updatedWindows} windows recalculated, ${transitionedFindings} findings transitioned`,
         );
 
         await writeAuditLog(db, {
           action: 'event_acknowledge',
           resource_type: 'events',
-          details: { system_id, from: fromTs, to: toTs, count: totalAcked },
+          details: { system_id, from: fromTs, to: toTs, count: totalAcked, updatedWindows, transitionedFindings },
           ip: request.ip,
           user_id: request.currentUser?.id,
           session_id: request.currentSession?.id,
@@ -221,6 +356,8 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
 
         return reply.send({
           acknowledged: totalAcked,
+          updated_windows: updatedWindows,
+          transitioned_findings: transitionedFindings,
           message: `${totalAcked} event${totalAcked !== 1 ? 's' : ''} acknowledged.`,
         });
       } catch (err: any) {
@@ -260,12 +397,22 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           to: toTs,
         });
 
-        app.log.info(`[${localTimestamp()}] Bulk event un-acknowledge: ${result} events`);
+        // Recalculate effective_scores (scores were deleted, will be re-scored by pipeline)
+        let updatedWindows = 0;
+        try {
+          updatedWindows = await recalcEffectiveScores(db, system_id || null);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after unack failed: ${err.message}`);
+        }
+
+        app.log.info(
+          `[${localTimestamp()}] Bulk event un-acknowledge: ${result} events, ${updatedWindows} windows recalculated`,
+        );
 
         await writeAuditLog(db, {
           action: 'event_unacknowledge',
           resource_type: 'events',
-          details: { count: result },
+          details: { count: result, updatedWindows },
           ip: request.ip,
           user_id: request.currentUser?.id,
           session_id: request.currentSession?.id,
@@ -273,11 +420,217 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
 
         return reply.send({
           unacknowledged: result,
+          updated_windows: updatedWindows,
           message: `${result} event${result !== 1 ? 's' : ''} un-acknowledged.`,
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Event un-acknowledge error: ${err.message}`);
         return reply.code(500).send({ error: 'Event un-acknowledgement failed.' });
+      }
+    },
+  );
+
+  // ── Acknowledge event group (per-template) ──────────────────
+  /**
+   * POST /api/v1/events/acknowledge-group
+   *
+   * Acknowledge all events matching a template group (by group_key / template_id)
+   * within a system.  Deletes their event_scores, recalculates effective scores,
+   * and transitions related open findings to 'acknowledged'.
+   *
+   * Body: { system_id: string, group_key: string }
+   */
+  app.post(
+    '/api/v1/events/acknowledge-group',
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
+    async (request, reply) => {
+      const body = request.body as any ?? {};
+      const { system_id, group_key } = body;
+
+      if (!system_id || typeof system_id !== 'string') {
+        return reply.code(400).send({ error: '"system_id" is required.' });
+      }
+      if (!group_key || typeof group_key !== 'string') {
+        return reply.code(400).send({ error: '"group_key" is required.' });
+      }
+
+      try {
+        const ackTs = new Date().toISOString();
+
+        // Acknowledge events matching the template group
+        // group_key is either a template_id (UUID) or an event ID for singletons
+        const ackResult = await db('events')
+          .where('system_id', system_id)
+          .whereNull('acknowledged_at')
+          .where(function (this: any) {
+            this.where('template_id', group_key)
+              .orWhere(db.raw('id::text = ?', [group_key]));
+          })
+          .update({ acknowledged_at: ackTs });
+
+        if (ackResult === 0) {
+          return reply.send({ acknowledged: 0, message: 'No matching events to acknowledge.' });
+        }
+
+        // Delete event_scores for the acknowledged events
+        const ackedIds = await db('events')
+          .where('system_id', system_id)
+          .where('acknowledged_at', ackTs)
+          .where(function (this: any) {
+            this.where('template_id', group_key)
+              .orWhere(db.raw('id::text = ?', [group_key]));
+          })
+          .select(db.raw('id::text as id'));
+
+        if (ackedIds.length > 0) {
+          const CHUNK = 5000;
+          const idStrings = ackedIds.map((r: any) => r.id);
+          for (let i = 0; i < idStrings.length; i += CHUNK) {
+            await db('event_scores')
+              .whereIn('event_id', idStrings.slice(i, i + CHUNK))
+              .del();
+          }
+        }
+
+        // Recalculate effective_scores
+        let updatedWindows = 0;
+        try {
+          updatedWindows = await recalcEffectiveScores(db, system_id);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after group ack failed: ${err.message}`);
+        }
+
+        // Transition related open findings to 'acknowledged'
+        let transitionedFindings = 0;
+        try {
+          const ackedMsgRows = await db('events')
+            .where('system_id', system_id)
+            .where('acknowledged_at', ackTs)
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere(db.raw('id::text = ?', [group_key]));
+            })
+            .distinct('message')
+            .limit(100);
+          const ackedMsgs = ackedMsgRows.map((r: any) => String(r.message || ''));
+          transitionedFindings = await transitionFindingsOnAck(db, system_id, ackedMsgs);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Finding transition after group ack failed: ${err.message}`);
+        }
+
+        app.log.info(
+          `[${localTimestamp()}] Group ack: ${ackResult} events (group=${group_key}, system=${system_id}), ` +
+          `${updatedWindows} windows recalculated, ${transitionedFindings} findings transitioned`,
+        );
+
+        await writeAuditLog(db, {
+          action: 'event_acknowledge_group',
+          resource_type: 'events',
+          details: { system_id, group_key, count: ackResult, updatedWindows, transitionedFindings },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
+        return reply.send({
+          acknowledged: ackResult,
+          updated_windows: updatedWindows,
+          transitioned_findings: transitionedFindings,
+          message: `${ackResult} event${ackResult !== 1 ? 's' : ''} in group acknowledged.`,
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Group event acknowledge error: ${err.message}`);
+        return reply.code(500).send({ error: 'Group event acknowledgement failed.' });
+      }
+    },
+  );
+
+  // ── Unacknowledge event group (per-template) ─────────────────
+  /**
+   * POST /api/v1/events/unacknowledge-group
+   *
+   * Un-acknowledge all events matching a template group within a system.
+   * Deletes their event_scores so the pipeline can re-score them.
+   */
+  app.post(
+    '/api/v1/events/unacknowledge-group',
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
+    async (request, reply) => {
+      const body = request.body as any ?? {};
+      const { system_id, group_key } = body;
+
+      if (!system_id || typeof system_id !== 'string') {
+        return reply.code(400).send({ error: '"system_id" is required.' });
+      }
+      if (!group_key || typeof group_key !== 'string') {
+        return reply.code(400).send({ error: '"group_key" is required.' });
+      }
+
+      try {
+        // Get IDs before clearing acknowledged_at
+        const rows = await db('events')
+          .where('system_id', system_id)
+          .whereNotNull('acknowledged_at')
+          .where(function (this: any) {
+            this.where('template_id', group_key)
+              .orWhere(db.raw('id::text = ?', [group_key]));
+          })
+          .select(db.raw('id::text as id'));
+
+        if (rows.length === 0) {
+          return reply.send({ unacknowledged: 0, message: 'No matching acknowledged events.' });
+        }
+
+        const idStrings = rows.map((r: any) => r.id);
+
+        // Clear acknowledged_at
+        await db('events')
+          .where('system_id', system_id)
+          .whereNotNull('acknowledged_at')
+          .where(function (this: any) {
+            this.where('template_id', group_key)
+              .orWhere(db.raw('id::text = ?', [group_key]));
+          })
+          .update({ acknowledged_at: null });
+
+        // Delete scores so pipeline re-scores them
+        const CHUNK = 5000;
+        for (let i = 0; i < idStrings.length; i += CHUNK) {
+          await db('event_scores')
+            .whereIn('event_id', idStrings.slice(i, i + CHUNK))
+            .del();
+        }
+
+        // Recalculate effective_scores
+        let updatedWindows = 0;
+        try {
+          updatedWindows = await recalcEffectiveScores(db, system_id);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after group unack failed: ${err.message}`);
+        }
+
+        app.log.info(
+          `[${localTimestamp()}] Group unack: ${rows.length} events (group=${group_key}, system=${system_id}), ` +
+          `${updatedWindows} windows recalculated`,
+        );
+
+        await writeAuditLog(db, {
+          action: 'event_unacknowledge_group',
+          resource_type: 'events',
+          details: { system_id, group_key, count: rows.length, updatedWindows },
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
+        return reply.send({
+          unacknowledged: rows.length,
+          updated_windows: updatedWindows,
+          message: `${rows.length} event${rows.length !== 1 ? 's' : ''} in group un-acknowledged.`,
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Group event un-acknowledge error: ${err.message}`);
+        return reply.code(500).send({ error: 'Group event un-acknowledgement failed.' });
       }
     },
   );
@@ -378,6 +731,48 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         prompt: vals['event_ack_prompt'] || DEFAULT_ACK_PROMPT,
         default_prompt: DEFAULT_ACK_PROMPT,
       });
+    },
+  );
+
+  // ── Fetch events by IDs (for "Show Events" on findings) ────
+  /**
+   * POST /api/v1/events/by-ids
+   *
+   * Returns events matching the provided IDs (max 50).
+   * Body: { ids: string[] }
+   */
+  app.post(
+    '/api/v1/events/by-ids',
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
+    async (request, reply) => {
+      const body = request.body as any ?? {};
+      const { ids } = body;
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return reply.code(400).send({ error: '"ids" must be a non-empty array.' });
+      }
+      if (ids.length > 50) {
+        return reply.code(400).send({ error: 'Maximum 50 event IDs per request.' });
+      }
+
+      // Validate each ID is a string matching UUID or alphanumeric format
+      const safeIdRegex = /^[0-9a-zA-Z_-]{1,128}$/;
+      const validIds = ids.filter((id: unknown) => typeof id === 'string' && safeIdRegex.test(id));
+      if (validIds.length === 0) {
+        return reply.code(400).send({ error: 'No valid event IDs provided.' });
+      }
+
+      try {
+        const events = await db('events')
+          .whereIn('id', validIds)
+          .select('id', 'timestamp', 'host', 'source_ip', 'severity', 'program', 'message', 'system_id', 'acknowledged_at')
+          .orderBy('timestamp', 'desc');
+
+        return reply.send({ events });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Fetch events by IDs error: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch events.' });
+      }
     },
   );
 }

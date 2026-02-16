@@ -122,7 +122,7 @@ export async function metaAnalyzeWindow(
   db: Knex,
   llm: LlmAdapter,
   windowId: string,
-  options?: { wMeta?: number },
+  options?: { wMeta?: number; excludeAcknowledged?: boolean },
 ): Promise<void> {
   const wMeta = options?.wMeta ?? DEFAULT_W_META;
 
@@ -168,6 +168,10 @@ export async function metaAnalyzeWindow(
     'Previously acknowledged by user — use only for pattern recognition context. ' +
     'Do not score, do not raise new findings for these events.';
 
+  // When called from re-evaluate (options.excludeAcknowledged=true), always
+  // skip acknowledged events so they don't appear in the regenerated summary.
+  const effectiveExcludeAcked = options?.excludeAcknowledged === true || ackMode === 'skip';
+
   // ── Gather events in window — via EventSource abstraction (system-aware) ──
   const eventSource = getEventSource(system, db);
   let events = await eventSource.getEventsInTimeRange(
@@ -176,7 +180,7 @@ export async function metaAnalyzeWindow(
     window.to_ts,
     {
       limit: metaMaxEvents,
-      excludeAcknowledged: ackMode === 'skip',
+      excludeAcknowledged: effectiveExcludeAcked,
     },
   );
 
@@ -528,6 +532,48 @@ export async function metaAnalyzeWindow(
     }
   }
 
+  // ── Filter previous summaries referencing acknowledged events ──
+  // When re-evaluating after the user has acknowledged events, previous
+  // summaries that discuss those events would mislead the LLM into
+  // re-raising them. Remove any summary whose text significantly overlaps
+  // with the messages of currently-acknowledged events for this system.
+  if (effectiveExcludeAcked && context.previousSummaries.length > 0) {
+    const ackedMessages = await db('events')
+      .where('system_id', system.id)
+      .whereNotNull('acknowledged_at')
+      .distinct('message')
+      .limit(500);
+
+    if (ackedMessages.length > 0) {
+      const ackedKeywords = new Set<string>();
+      for (const row of ackedMessages) {
+        for (const w of significantWords(String(row.message || ''))) {
+          ackedKeywords.add(w);
+        }
+      }
+
+      if (ackedKeywords.size > 0) {
+        const before = context.previousSummaries.length;
+        context.previousSummaries = context.previousSummaries.filter((ps) => {
+          const summaryWords = significantWords(ps.summary);
+          let overlap = 0;
+          for (const w of ackedKeywords) {
+            if (summaryWords.has(w)) overlap++;
+          }
+          const ratio = overlap / ackedKeywords.size;
+          return ratio < 0.3; // stricter threshold for acked events
+        });
+        const removed = before - context.previousSummaries.length;
+        if (removed > 0) {
+          console.log(
+            `[${localTimestamp()}] Meta-analyze: removed ${removed} previous summary/summaries ` +
+            `referencing acknowledged events (window=${windowId})`,
+          );
+        }
+      }
+    }
+  }
+
   // ── Call LLM for meta-analysis ──────────────────────────
   let result: Awaited<ReturnType<typeof llm.metaAnalyze>>['result'];
   let usage: Awaited<ReturnType<typeof llm.metaAnalyze>>['usage'];
@@ -696,6 +742,25 @@ export async function metaAnalyzeWindow(
     for (const finding of findingsToInsert) {
       const newId = uuidv4();
       newlyInsertedIds.push(newId);
+
+      // Match finding text to source events to store key_event_ids.
+      // Compare significant words in the finding against event messages.
+      const findingWords = significantWords(finding.text);
+      const matchedEventIds: string[] = [];
+      if (findingWords.size > 0) {
+        for (const [eid, msg] of eventIndexToMessage) {
+          const evWords = significantWords(msg);
+          let overlap = 0;
+          for (const w of findingWords) {
+            if (evWords.has(w)) overlap++;
+          }
+          if (findingWords.size > 0 && overlap / findingWords.size >= 0.3) {
+            const resolvedId = eventIndexToId.get(eid);
+            if (resolvedId) matchedEventIds.push(resolvedId);
+          }
+        }
+      }
+
       await trx('findings').insert({
         id: newId,
         system_id: system.id,
@@ -709,6 +774,7 @@ export async function metaAnalyzeWindow(
         occurrence_count: 1,
         consecutive_misses: 0,
         original_severity: finding.severity,
+        key_event_ids: matchedEventIds.length > 0 ? JSON.stringify(matchedEventIds.slice(0, 20)) : null,
       });
     }
 
@@ -822,9 +888,11 @@ export async function metaAnalyzeWindow(
         const findingWords = new Set(findingTextClean.split(/\s+/).filter((w) => w.length > 3));
         const SELF_REF_THRESHOLD = 0.4;
         let allSelfReferential = true;
+        let anyRefChecked = false;
         for (const ref of eventRefs) {
           const refMessage = stripPunctuation((eventIndexToMessage.get(ref) ?? '').toLowerCase());
           if (!refMessage) continue;
+          anyRefChecked = true;
           const refWords = new Set(refMessage.split(/\s+/).filter((w) => w.length > 3));
 
           // Direction A: finding→event (how much of the finding appears in the event)
@@ -849,7 +917,7 @@ export async function metaAnalyzeWindow(
             break;
           }
         }
-        if (allSelfReferential) {
+        if (allSelfReferential && anyRefChecked) {
           console.log(
             `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
             `(${openFinding.text.slice(0, 60)}…): proof events describe the same problem, ` +
@@ -874,14 +942,17 @@ export async function metaAnalyzeWindow(
           'error', 'err', 'critical', 'crit', 'alert', 'emergency', 'emerg',
         ]);
         let allErrorSeverity = true;
+        let anyKnownSeverity = false;
         for (const ref of eventRefs) {
           const sev = (eventIndexToSeverity.get(ref) ?? '').toLowerCase().trim();
-          if (!sev || !ERROR_SEVERITIES.has(sev)) {
+          if (!sev) continue; // Unknown ref or missing severity — skip, don't count as evidence
+          anyKnownSeverity = true;
+          if (!ERROR_SEVERITIES.has(sev)) {
             allErrorSeverity = false;
             break;
           }
         }
-        if (allErrorSeverity && eventRefs.length > 0) {
+        if (allErrorSeverity && anyKnownSeverity) {
           console.log(
             `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
             `(${openFinding.text.slice(0, 60)}…): all proof events have error-level severity ` +
@@ -1058,9 +1129,17 @@ export async function metaAnalyzeWindow(
     for (const criterion of CRITERIA) {
       const metaScore = (result.meta_scores as any)[criterion.slug] ?? 0;
 
+      // Filter out acknowledged events from max_event_score calculation
+      // so acked events do not inflate the effective score.
       const maxEventRow = await trx('event_scores')
         .whereIn('event_id', eventIds)
         .where({ criterion_id: criterion.id })
+        .whereNotExists(function (this: any) {
+          this.select(trx.raw(1))
+            .from('events')
+            .whereRaw('events.id::text = event_scores.event_id')
+            .whereNotNull('events.acknowledged_at');
+        })
         .max('score as max_score')
         .first();
 

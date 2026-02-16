@@ -460,6 +460,7 @@ export class OpenAiAdapter implements LlmAdapter {
     const userContent = sections.join('\n');
     const prompt = options?.systemPrompt ?? DEFAULT_SCORE_SYSTEM_PROMPT;
 
+    const effectiveScoringModel = (options?.modelOverride?.trim()) || this.model;
     let scores: ScoreResult[];
     let usage: LlmUsageInfo;
     try {
@@ -487,7 +488,7 @@ export class OpenAiAdapter implements LlmAdapter {
       console.error(`[${localTimestamp()}] LLM scoring failed:`, err);
       // Return zero scores rather than crash the pipeline
       scores = events.map(() => emptyScoreResult());
-      usage = { model: this.model, token_input: 0, token_output: 0, request_count: 1 };
+      usage = { model: effectiveScoringModel, token_input: 0, token_output: 0, request_count: 1 };
     }
 
     return { scores, usage };
@@ -731,7 +732,7 @@ export class OpenAiAdapter implements LlmAdapter {
       request_count: 1,
     };
 
-    return { content: content ?? '{}', usage };
+    return { content: content || '{}', usage };
   }
 }
 

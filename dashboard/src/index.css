@@ -632,10 +632,6 @@ input:focus-visible,
   word-break: break-word;
 }
 
-.criterion-actions-cell {
-  white-space: nowrap;
-  text-align: center;
-}
 .criterion-actions-cell .btn-mark-ok {
   font-size: 0.72rem;
   padding: 2px 8px;
@@ -645,6 +641,100 @@ input:focus-visible,
   color: var(--green, #4caf50);
   font-weight: 500;
   opacity: 0.8;
+}
+
+/* ── Per-group Ack button ──────────────────────────────── */
+.btn-ack-group {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  background: rgba(96, 165, 250, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  margin-left: 4px;
+}
+.btn-ack-group:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.25);
+  border-color: #60a5fa;
+}
+.btn-ack-group:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.criterion-actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* Show acknowledged toggle in criterion header */
+.show-acked-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.show-acked-toggle input[type="checkbox"] {
+  accent-color: var(--accent, #60a5fa);
+}
+
+/* Acknowledged group row styling */
+.criterion-group-row.group-acknowledged {
+  opacity: 0.55;
+}
+.criterion-group-row.group-acknowledged td {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255,255,255,0.25);
+}
+
+/* Active issues detail label */
+.active-issues-detail {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* ── Finding proof events ──────────────────────────────── */
+.finding-proof-events {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.finding-proof-events h5 {
+  margin: 0 0 6px 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.finding-proof-event {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.78rem;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.proof-event-time {
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 140px;
+}
+.proof-event-host,
+.proof-event-program {
+  color: var(--text-muted);
+  min-width: 80px;
+}
+.proof-event-message {
+  color: var(--text);
+  word-break: break-word;
 }
 
 /* ── Grouped criterion table ──────────────────────────── */

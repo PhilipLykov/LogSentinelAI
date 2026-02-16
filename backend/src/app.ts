@@ -33,9 +33,10 @@ export async function buildApp(): Promise<FastifyInstance> {
           },
         },
     // A03: reject overly large payloads to prevent abuse.
-    // 10 MB accommodates Fluent Bit and rsyslog batches that buffer
-    // hundreds of events per flush while still preventing unbounded abuse.
-    bodyLimit: 10_485_760,
+    // 50 MB accommodates Fluent Bit Docker-log batches that can be very
+    // large when containers produce high log volume. The Fluent Bit
+    // Mem_Buf_Limit on the tail input provides the primary size control.
+    bodyLimit: 52_428_800,
   });
 
   // ── Security plugins (A05: secure headers, CORS) ──────────

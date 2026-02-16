@@ -380,9 +380,18 @@ export class PgEventSource implements EventSource {
       const ids = await batchQ.select('id').limit(BATCH_SIZE);
       if (ids.length === 0) break;
 
+      const idStrings = ids.map((r: any) => r.id);
+
       await this.db('events')
-        .whereIn('id', ids.map((r: any) => r.id))
+        .whereIn('id', idStrings)
         .update({ acknowledged_at: ackTs });
+
+      // Delete event_scores for acknowledged events so they no longer
+      // contribute to effective scores or appear in drill-downs.
+      // On unacknowledge the pipeline will re-score them automatically.
+      await this.db('event_scores')
+        .whereIn('event_id', idStrings.map(String))
+        .del();
 
       totalAcked += ids.length;
     }
@@ -391,13 +400,36 @@ export class PgEventSource implements EventSource {
   }
 
   async unacknowledgeEvents(filters: AckFilters): Promise<number> {
-    let query = this.db('events')
+    // Collect IDs of events being un-acknowledged so we can delete
+    // their (now-stale zeroed) scores and let the pipeline re-score them.
+    let idQuery = this.db('events')
       .whereNotNull('acknowledged_at')
       .where('timestamp', '<=', filters.to);
-    if (filters.from) query = query.where('timestamp', '>=', filters.from);
-    if (filters.system_id) query = query.where('system_id', filters.system_id);
+    if (filters.from) idQuery = idQuery.where('timestamp', '>=', filters.from);
+    if (filters.system_id) idQuery = idQuery.where('system_id', filters.system_id);
 
-    return query.update({ acknowledged_at: null });
+    const rows = await idQuery.select('id');
+    if (rows.length === 0) return 0;
+
+    const idStrings = rows.map((r: any) => String(r.id));
+
+    // Clear acknowledged_at
+    let updateQ = this.db('events')
+      .whereNotNull('acknowledged_at')
+      .where('timestamp', '<=', filters.to);
+    if (filters.from) updateQ = updateQ.where('timestamp', '>=', filters.from);
+    if (filters.system_id) updateQ = updateQ.where('system_id', filters.system_id);
+    const count = await updateQ.update({ acknowledged_at: null });
+
+    // Delete existing scores so the scoring pipeline re-scores these events
+    const CHUNK = 5000;
+    for (let i = 0; i < idStrings.length; i += CHUNK) {
+      await this.db('event_scores')
+        .whereIn('event_id', idStrings.slice(i, i + CHUNK))
+        .del();
+    }
+
+    return count;
   }
 
   // ── Maintenance & admin ────────────────────────────────────

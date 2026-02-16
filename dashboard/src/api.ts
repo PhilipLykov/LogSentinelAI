@@ -454,6 +454,8 @@ export interface Finding {
   reopen_count: number;
   /** @deprecated Flapping eliminated by design — resolved findings are never reopened. Kept for backward compat. */
   is_flapping: boolean;
+  /** IDs of source events that contributed to this finding (from migration 024). */
+  key_event_ids: string[] | null;
 }
 
 export async function fetchFindings(
@@ -906,16 +908,19 @@ export interface GroupedEventScoreRecord {
   last_seen: string;
   hosts: string[];
   source_ips: string[];
+  /** Present only when show_acknowledged=true; true if the group contains acknowledged events. */
+  acknowledged?: boolean;
 }
 
 export async function fetchGroupedEventScores(
   systemId: string,
-  opts?: { criterion_id?: number; limit?: number; min_score?: number },
+  opts?: { criterion_id?: number; limit?: number; min_score?: number; show_acknowledged?: boolean },
 ): Promise<GroupedEventScoreRecord[]> {
   const params = new URLSearchParams();
   if (opts?.criterion_id) params.set('criterion_id', String(opts.criterion_id));
   if (opts?.limit) params.set('limit', String(opts.limit));
   if (opts?.min_score !== undefined) params.set('min_score', String(opts.min_score));
+  if (opts?.show_acknowledged) params.set('show_acknowledged', 'true');
   return apiFetch(`/api/v1/systems/${systemId}/event-scores/grouped?${params}`);
 }
 
@@ -1140,6 +1145,8 @@ export interface AckEventsParams {
 export interface AckEventsResponse {
   acknowledged: number;
   message: string;
+  updated_windows?: number;
+  transitioned_findings?: number;
 }
 
 export async function acknowledgeEvents(params: AckEventsParams): Promise<AckEventsResponse> {
@@ -1149,10 +1156,59 @@ export async function acknowledgeEvents(params: AckEventsParams): Promise<AckEve
   });
 }
 
-export async function unacknowledgeEvents(params: AckEventsParams): Promise<{ unacknowledged: number; message: string }> {
+export async function unacknowledgeEvents(params: AckEventsParams): Promise<{ unacknowledged: number; updated_windows?: number; message: string }> {
   return apiFetch('/api/v1/events/unacknowledge', {
     method: 'POST',
     body: JSON.stringify(params),
+  });
+}
+
+// ── Per-group Acknowledgement ─────────────────────────────────
+
+export interface AckGroupParams {
+  system_id: string;
+  group_key: string;
+}
+
+export interface AckGroupResponse {
+  acknowledged: number;
+  updated_windows?: number;
+  transitioned_findings?: number;
+  message: string;
+}
+
+export async function acknowledgeEventGroup(params: AckGroupParams): Promise<AckGroupResponse> {
+  return apiFetch('/api/v1/events/acknowledge-group', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function unacknowledgeEventGroup(params: AckGroupParams): Promise<{ unacknowledged: number; updated_windows?: number; message: string }> {
+  return apiFetch('/api/v1/events/unacknowledge-group', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// ── Fetch events by IDs ───────────────────────────────────────
+
+export interface EventDetail {
+  id: string;
+  timestamp: string;
+  host: string | null;
+  source_ip: string | null;
+  severity: string | null;
+  program: string | null;
+  message: string;
+  system_id: string;
+  acknowledged_at: string | null;
+}
+
+export async function fetchEventsByIds(ids: string[]): Promise<{ events: EventDetail[] }> {
+  return apiFetch('/api/v1/events/by-ids', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
   });
 }
 

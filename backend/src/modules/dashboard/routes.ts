@@ -417,8 +417,10 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   );
 
   // ── Re-evaluate meta-analysis for a system ─────────────────
-  // Creates a fresh 2-hour window and runs a full meta-analysis (LLM call).
+  // Creates a fresh window and runs a full meta-analysis (LLM call).
   // Normal-behavior events are automatically excluded by metaAnalyzeWindow.
+  // Acknowledged events are always excluded during re-evaluate so the fresh
+  // summary does not reference events the user has already acknowledged.
   app.post<{ Params: { systemId: string } }>(
     '/api/v1/systems/:systemId/re-evaluate',
     { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
@@ -470,7 +472,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       );
 
       try {
-        await metaAnalyzeWindow(db, llm, windowId);
+        await metaAnalyzeWindow(db, llm, windowId, { excludeAcknowledged: true });
       } catch (err) {
         console.error(
           `[${localTimestamp()}] Re-evaluate meta-analysis failed for window ${windowId}: ${err instanceof Error ? err.message : String(err)}`,
