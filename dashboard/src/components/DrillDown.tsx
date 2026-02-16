@@ -731,12 +731,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     findingsTab === 'acknowledged' ? ackedFindings :
     resolvedFindings;
 
-  // Active issues = open + acknowledged (things that need attention)
-  const activeFindings = [...openFindings, ...ackedFindings];
   const findingsPanelRef = useRef<HTMLDivElement>(null);
 
-  // Severity breakdown for the banner
-  const severityBreakdown = activeFindings.reduce<Record<string, number>>((acc, f) => {
+  // Severity breakdown for the banner (only count OPEN findings — acked are handled)
+  const severityBreakdown = openFindings.reduce<Record<string, number>>((acc, f) => {
     const sev = (f.severity ?? 'info').toLowerCase();
     acc[sev] = (acc[sev] ?? 0) + 1;
     return acc;
@@ -786,7 +784,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       )}
 
       {/* ── Active Issues Summary banner ── */}
-      {!findingsLoading && activeFindings.length > 0 && (
+      {/* Only show the alarming banner when there are OPEN findings.
+          If all findings are acknowledged, the user has already handled them. */}
+      {!findingsLoading && openFindings.length > 0 && (
         <div
           className="active-issues-banner"
           onClick={() => findingsPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -801,10 +801,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
           title="Click to scroll to findings"
         >
           <span className="active-issues-count">
-            {activeFindings.length} active issue{activeFindings.length !== 1 ? 's' : ''}
-            {openFindings.length > 0 && ackedFindings.length > 0 && (
+            {openFindings.length} open issue{openFindings.length !== 1 ? 's' : ''}
+            {ackedFindings.length > 0 && (
               <span className="active-issues-detail">
-                {' '}({openFindings.length} open, {ackedFindings.length} ack'd)
+                {' '}(+ {ackedFindings.length} ack'd)
               </span>
             )}
           </span>
