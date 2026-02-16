@@ -1527,6 +1527,23 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </div>
               </fieldset>
 
+              <fieldset className="tok-opt-group">
+                <legend>Ingestion</legend>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={pipeCfg.multiline_reassembly !== false}
+                      onChange={(e) => setPipeCfg({ ...pipeCfg, multiline_reassembly: e.target.checked })}
+                    />
+                    Multiline syslog reassembly
+                  </label>
+                  <span className="form-hint">
+                    Automatically merge multiline syslog messages (e.g. PostgreSQL continuation lines) into a single event during ingestion. Default: enabled.
+                  </span>
+                </div>
+              </fieldset>
+
               <div className="prompt-editor-actions">
                 <button
                   type="button"

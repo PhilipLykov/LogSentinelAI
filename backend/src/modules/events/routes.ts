@@ -41,6 +41,15 @@ async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: str
   //   1. PG events: JOIN events → event_scores (WHERE acknowledged_at IS NULL)
   //   2. ES events: JOIN es_event_metadata → event_scores (WHERE acknowledged_at IS NULL)
   // This ensures both storage backends contribute to effective scores.
+  //
+  // The system filter is built conditionally to avoid the PostgreSQL
+  // "could not determine data type of parameter" error that occurs when
+  // using (? IS NULL OR col = ?) with untyped NULL parameters.
+  const systemFilter = systemId ? 'AND eff.system_id = ?' : '';
+  const params: unknown[] = systemId
+    ? [since, systemId, DEFAULT_W_META, 1 - DEFAULT_W_META]
+    : [since, DEFAULT_W_META, 1 - DEFAULT_W_META];
+
   const result = await db.raw(`
     WITH window_max AS (
       SELECT
@@ -78,7 +87,7 @@ async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: str
         ) combined
       ) sub ON true
       WHERE w.to_ts >= ?
-        AND (? IS NULL OR eff.system_id = ?)
+        ${systemFilter}
     )
     UPDATE effective_scores eff
     SET max_event_score = wm.new_max,
@@ -90,7 +99,7 @@ async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: str
     WHERE eff.window_id = wm.window_id
       AND eff.system_id = wm.system_id
       AND eff.criterion_id = wm.criterion_id
-  `, [since, systemId, systemId, DEFAULT_W_META, 1 - DEFAULT_W_META]);
+  `, params);
 
   return result.rowCount ?? 0;
 }

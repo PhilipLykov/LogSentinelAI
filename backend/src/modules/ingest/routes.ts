@@ -7,6 +7,7 @@ import { localTimestamp } from '../../config/index.js';
 import { normalizeEntry, computeNormalizedHash, flattenECS, cleanTransportAddress } from './normalize.js';
 import { redactEvent } from './redact.js';
 import { matchSource } from './sourceMatch.js';
+import { reassembleMultilineEntries } from './multiline.js';
 import type { IngestEntry, IngestResponse } from '../../types/index.js';
 
 const MAX_BATCH_SIZE = 1000;
@@ -56,21 +57,46 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
     '/api/v1/ingest',
     { preHandler: requireAuth(PERMISSIONS.INGEST) },
     async (request, reply) => {
-      const entries = extractEntries(request.body);
+      const rawEntries = extractEntries(request.body);
 
-      if (!entries) {
+      if (!rawEntries) {
         return reply.code(400).send({
           error: 'Request body must be: {"events":[...]}, a JSON array [...], or a single event object.',
         });
       }
 
-      if (entries.length > MAX_BATCH_SIZE) {
+      if (rawEntries.length > MAX_BATCH_SIZE) {
         return reply.code(400).send({
           error: `Batch too large. Maximum ${MAX_BATCH_SIZE} events per request.`,
         });
       }
 
       const db = getDb();
+
+      // ── Multiline reassembly (e.g. PostgreSQL continuation lines) ──
+      // Merges adjacent continuation lines into a single event before
+      // normalisation.  Controlled by pipeline_config.multiline_reassembly.
+      let entries = rawEntries;
+      try {
+        const cfgRow = await db('app_config').where({ key: 'pipeline_config' }).first('value');
+        const parsed = cfgRow?.value
+          ? (typeof cfgRow.value === 'string' ? JSON.parse(cfgRow.value) : cfgRow.value)
+          : {};
+        const enabled = parsed.multiline_reassembly !== false; // default: enabled
+        if (enabled) {
+          const before = entries.length;
+          entries = reassembleMultilineEntries(entries);
+          if (entries.length < before) {
+            app.log.info(
+              `[${localTimestamp()}] Multiline reassembly: ${before} → ${entries.length} entries (merged ${before - entries.length})`,
+            );
+          }
+        }
+      } catch (err) {
+        app.log.warn(`[${localTimestamp()}] Multiline reassembly config read failed, using default (enabled): ${err}`);
+        entries = reassembleMultilineEntries(entries);
+      }
+
       let accepted = 0;
       let rejected = 0;
       const errors: string[] = [];

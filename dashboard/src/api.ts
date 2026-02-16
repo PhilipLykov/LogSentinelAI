@@ -1350,6 +1350,7 @@ export interface PipelineConfig {
   window_minutes: number;
   scoring_limit_per_run: number;
   effective_score_meta_weight: number;
+  multiline_reassembly: boolean;
 }
 
 export interface PipelineConfigResponse {

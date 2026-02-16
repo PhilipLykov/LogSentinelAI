@@ -1080,6 +1080,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     window_minutes: 5,
     scoring_limit_per_run: 500,
     effective_score_meta_weight: 0.7,
+    multiline_reassembly: true,
   };
 
   /** GET /api/v1/pipeline-config — return current pipeline config with defaults. */
@@ -1132,6 +1133,11 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         const v = Number(body.effective_score_meta_weight);
         if (!Number.isFinite(v) || v < 0 || v > 1) {
           return reply.code(400).send({ error: 'effective_score_meta_weight must be 0.0–1.0.' });
+        }
+      }
+      if (body.multiline_reassembly !== undefined) {
+        if (typeof body.multiline_reassembly !== 'boolean') {
+          return reply.code(400).send({ error: 'multiline_reassembly must be a boolean.' });
         }
       }
 
