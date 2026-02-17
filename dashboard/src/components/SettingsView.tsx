@@ -129,6 +129,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         name: data.name,
         description: data.description,
         retention_days: data.retention_days,
+        tz_offset_minutes: data.tz_offset_minutes,
         event_source: data.event_source,
         es_connection_id: data.es_connection_id,
         es_config: data.es_config,
@@ -152,6 +153,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         name: data.name,
         description: data.description,
         retention_days: data.retention_days,
+        tz_offset_minutes: data.tz_offset_minutes,
         event_source: data.event_source,
         es_connection_id: data.es_connection_id,
         es_config: data.es_config,
@@ -606,6 +608,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
               initialName={modal.system.name}
               initialDescription={modal.system.description}
               initialRetentionDays={modal.system.retention_days}
+              initialTzOffsetMinutes={modal.system.tz_offset_minutes ?? null}
               initialEventSource={modal.system.event_source ?? 'postgresql'}
               initialEsConnectionId={modal.system.es_connection_id ?? null}
               initialEsConfig={modal.system.es_config ?? null}

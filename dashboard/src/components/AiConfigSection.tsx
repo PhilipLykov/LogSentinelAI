@@ -1542,6 +1542,18 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                     Automatically merge multiline syslog messages (e.g. PostgreSQL continuation lines) into a single event during ingestion. Default: enabled.
                   </span>
                 </div>
+                <div className="tok-opt-row">
+                  <label>Max future drift (seconds)</label>
+                  <NumericInput
+                    min={0} max={86400} step={60}
+                    value={pipeCfg.max_future_drift_seconds ?? 300}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, max_future_drift_seconds: v })}
+                    style={{ width: 110 }}
+                  />
+                  <span className="form-hint">
+                    Events with timestamps further into the future than this are clamped to the current time. Prevents clock-skew and timezone errors from polluting data. Set to 0 to disable. Default: 300 (5 min).
+                  </span>
+                </div>
               </fieldset>
 
               <div className="prompt-editor-actions">

@@ -215,6 +215,60 @@ export function computeNormalizedHash(event: NormalizedEvent): string {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
 
+// ── Timestamp corrections ────────────────────────────────────
+
+/**
+ * Apply a timezone offset correction to an ISO 8601 timestamp string.
+ *
+ * RFC 3164 syslog timestamps have NO timezone information.  Fluent Bit
+ * interprets them in its container's local time.  If a source's actual
+ * timezone differs, the stored timestamp is wrong by the delta.
+ *
+ * @param isoTimestamp  ISO 8601 string (e.g. "2026-02-17T03:14:58.000Z")
+ * @param offsetMinutes Offset in minutes.  Positive = source is AHEAD of
+ *                      Fluent Bit's TZ (we subtract); negative = BEHIND (we add).
+ * @returns Corrected ISO 8601 string, or original if parsing fails.
+ */
+export function applyTimezoneOffset(isoTimestamp: string, offsetMinutes: number): string {
+  if (!offsetMinutes) return isoTimestamp;
+  try {
+    const d = new Date(isoTimestamp);
+    if (isNaN(d.getTime())) return isoTimestamp;
+    d.setTime(d.getTime() - offsetMinutes * 60_000);
+    return d.toISOString();
+  } catch {
+    return isoTimestamp;
+  }
+}
+
+/**
+ * Clamp a future timestamp to the current time if it exceeds the allowed drift.
+ *
+ * Prevents events with impossible future timestamps (from clock skew,
+ * misconfigured devices, or timezone errors) from polluting the database.
+ *
+ * @param isoTimestamp       ISO 8601 string
+ * @param maxDriftSeconds    Maximum allowed drift into the future (default 300 = 5 min)
+ * @returns Object with the (possibly clamped) timestamp and a boolean flag.
+ */
+export function clampFutureTimestamp(
+  isoTimestamp: string,
+  maxDriftSeconds: number,
+): { timestamp: string; clamped: boolean } {
+  if (maxDriftSeconds <= 0) return { timestamp: isoTimestamp, clamped: false };
+  try {
+    const eventTime = new Date(isoTimestamp).getTime();
+    if (isNaN(eventTime)) return { timestamp: isoTimestamp, clamped: false };
+    const maxAllowed = Date.now() + maxDriftSeconds * 1000;
+    if (eventTime > maxAllowed) {
+      return { timestamp: new Date().toISOString(), clamped: true };
+    }
+    return { timestamp: isoTimestamp, clamped: false };
+  } catch {
+    return { timestamp: isoTimestamp, clamped: false };
+  }
+}
+
 // ── Severity alias → canonical name mapping ──────────────────
 // Maps common syslog severity aliases and application-level names
 // to their canonical RFC 5424 forms. Applied during final normalization.

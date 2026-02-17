@@ -4,7 +4,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
-import { normalizeEntry, computeNormalizedHash, flattenECS, cleanTransportAddress } from './normalize.js';
+import { normalizeEntry, computeNormalizedHash, flattenECS, cleanTransportAddress, applyTimezoneOffset, clampFutureTimestamp } from './normalize.js';
 import { redactEvent } from './redact.js';
 import { matchSource } from './sourceMatch.js';
 import { reassembleMultilineEntries } from './multiline.js';
@@ -73,32 +73,55 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
 
       const db = getDb();
 
-      // ── Multiline reassembly (e.g. PostgreSQL continuation lines) ──
-      // Merges adjacent continuation lines into a single event before
-      // normalisation.  Controlled by pipeline_config.multiline_reassembly.
-      let entries = rawEntries;
+      // ── Load pipeline config ────────────────────────────────────
+      let pipelineCfg: Record<string, unknown> = {};
       try {
         const cfgRow = await db('app_config').where({ key: 'pipeline_config' }).first('value');
-        const parsed = cfgRow?.value
-          ? (typeof cfgRow.value === 'string' ? JSON.parse(cfgRow.value) : cfgRow.value)
+        pipelineCfg = cfgRow?.value
+          ? (typeof cfgRow.value === 'string' ? JSON.parse(cfgRow.value) : cfgRow.value) ?? {}
           : {};
-        const enabled = parsed.multiline_reassembly !== false; // default: enabled
-        if (enabled) {
-          const before = entries.length;
-          entries = reassembleMultilineEntries(entries);
-          if (entries.length < before) {
-            app.log.info(
-              `[${localTimestamp()}] Multiline reassembly: ${before} → ${entries.length} entries (merged ${before - entries.length})`,
-            );
+      } catch (err) {
+        app.log.warn(`[${localTimestamp()}] Pipeline config read failed, using defaults: ${err}`);
+      }
+
+      // ── Multiline reassembly (e.g. PostgreSQL continuation lines) ──
+      // Merges related multi-line log entries into a single event before
+      // normalisation.  Controlled by pipeline_config.multiline_reassembly.
+      let entries = rawEntries;
+      const multilineEnabled = pipelineCfg.multiline_reassembly !== false; // default: enabled
+      if (multilineEnabled) {
+        const before = entries.length;
+        entries = reassembleMultilineEntries(entries);
+        if (entries.length < before) {
+          app.log.info(
+            `[${localTimestamp()}] Multiline reassembly: ${before} → ${entries.length} entries (merged ${before - entries.length})`,
+          );
+        }
+      }
+
+      // ── Timestamp correction settings ──────────────────────────
+      const maxFutureDriftSeconds = typeof pipelineCfg.max_future_drift_seconds === 'number'
+        ? pipelineCfg.max_future_drift_seconds
+        : 300; // default: 5 minutes
+
+      // Pre-load per-system timezone offsets (one lightweight query per batch)
+      const tzOffsetMap = new Map<string, number>();
+      try {
+        const systems = await db('monitored_systems')
+          .whereNotNull('tz_offset_minutes')
+          .select('id', 'tz_offset_minutes');
+        for (const sys of systems) {
+          if (typeof sys.tz_offset_minutes === 'number' && sys.tz_offset_minutes !== 0) {
+            tzOffsetMap.set(sys.id, sys.tz_offset_minutes);
           }
         }
-      } catch (err) {
-        app.log.warn(`[${localTimestamp()}] Multiline reassembly config read failed, using default (enabled): ${err}`);
-        entries = reassembleMultilineEntries(entries);
+      } catch {
+        // Non-critical — proceed without timezone correction
       }
 
       let accepted = 0;
       let rejected = 0;
+      let futureClamped = 0;
       const errors: string[] = [];
       const receivedAt = new Date().toISOString(); // Single timestamp for entire batch
 
@@ -166,6 +189,28 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           continue;
         }
 
+        // 2b. Apply per-system timezone offset (corrects RFC 3164 TZ mismatch)
+        const tzOffset = tzOffsetMap.get(match.system_id);
+        if (tzOffset) {
+          normalized.timestamp = applyTimezoneOffset(normalized.timestamp, tzOffset);
+        }
+
+        // 2c. Future-timestamp guard: clamp to now if too far ahead
+        if (maxFutureDriftSeconds > 0) {
+          const { timestamp: clampedTs, clamped } = clampFutureTimestamp(
+            normalized.timestamp,
+            maxFutureDriftSeconds,
+          );
+          if (clamped) {
+            futureClamped++;
+            app.log.warn(
+              `[${localTimestamp()}] Future timestamp clamped: ${normalized.timestamp} → ${clampedTs} ` +
+              `(system=${match.system_id}, host=${normalized.host ?? '?'})`,
+            );
+            normalized.timestamp = clampedTs;
+          }
+        }
+
         // 3. Redact (if enabled)
         const redacted = redactEvent(normalized);
 
@@ -213,7 +258,7 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
       }
 
       app.log.info(
-        { accepted, rejected, ip: request.ip },
+        { accepted, rejected, futureClamped, ip: request.ip },
         `[${localTimestamp()}] Ingest complete`,
       );
 

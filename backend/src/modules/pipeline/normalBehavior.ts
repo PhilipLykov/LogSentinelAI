@@ -47,9 +47,17 @@ export interface GeneratedPattern {
 
 // ── Regex Helpers ────────────────────────────────────────────
 
-/** Escape regex special characters in a literal string segment. */
+/**
+ * Escape regex special characters in a literal string segment.
+ *
+ * Characters escaped (special in POSIX ERE / JavaScript / PostgreSQL ARE):
+ *   . * + ? ^ $ { } ( ) | [ ] \  /
+ *
+ * `/` is not syntactically special in POSIX or JS `new RegExp()`, but we
+ * escape it for safety and consistency (e.g. forward-compat, readability).
+ */
 export function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return str.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 }
 
 // ── Context-Aware Regex Generation ───────────────────────────
@@ -85,7 +93,7 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
   // IPv4 addresses with optional CIDR
   {
     detect: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\/\d{1,2})?\b/g,
-    replacement: '\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?:/\\d{1,2})?',
+    replacement: '\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?:\\/\\d{1,2})?',
     tag: 'IPv4',
   },
   // IPv6 addresses (simplified)
@@ -133,7 +141,7 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
   // File/directory paths (2+ segments)
   {
     detect: /(?:\/[\w.+-]+){2,}/g,
-    replacement: '(?:/[\\w.+-]+)+',
+    replacement: '(?:\\/[\\w.+-]+)+',
     tag: 'PATH',
   },
   // Double-quoted strings
@@ -147,6 +155,14 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
     detect: /'[^']*'/g,
     replacement: "'[^']*'",
     tag: 'SQUOTE',
+  },
+  // Numeric suffix after underscore (e.g., disk_03, cpu_0, port_8080)
+  // Must come before NUM — these aren't caught by \b\d+\b because
+  // underscore is a word character (no boundary between _ and 0).
+  {
+    detect: /_\d+\b/g,
+    replacement: '_\\d+',
+    tag: 'UNDERSCORE_NUM',
   },
   // Standalone numbers (not inside words) — must be last
   {

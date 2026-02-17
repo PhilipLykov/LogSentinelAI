@@ -1169,8 +1169,12 @@ export async function metaAnalyzeWindow(
     // Single query to get MAX(score) per criterion for un-acknowledged events,
     // then batch-insert all 6 effective_scores rows in one statement.
     //
-    // The NOT EXISTS check supports both PG events (acknowledged_at on events table)
-    // and ES events (acknowledged_at on es_event_metadata table).
+    // The NOT EXISTS checks exclude:
+    //   1. PG events with acknowledged_at set
+    //   2. ES events with acknowledged_at set (via es_event_metadata)
+    //   3. Events matching any enabled normal behavior template (defense-in-depth;
+    //      eventIds is already pre-filtered, but scores may linger in event_scores
+    //      for templates created after scoring)
     const maxScoreRows = await trx.raw(`
       SELECT es.criterion_id, COALESCE(MAX(es.score), 0) AS max_score
       FROM event_scores es
@@ -1186,6 +1190,15 @@ export async function metaAnalyzeWindow(
           WHERE em.es_event_id = es.event_id
             AND em.system_id = ?
             AND em.acknowledged_at IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM events e2
+          JOIN normal_behavior_templates nbt ON nbt.enabled = true
+            AND (nbt.system_id IS NULL OR nbt.system_id = e2.system_id)
+            AND e2.message ~* nbt.pattern
+            AND (nbt.host_pattern IS NULL OR e2.host ~* nbt.host_pattern)
+            AND (nbt.program_pattern IS NULL OR e2.program ~* nbt.program_pattern)
+          WHERE e2.id::text = es.event_id
         )
       GROUP BY es.criterion_id
     `, [eventIds.map(String), system.id]);

@@ -99,19 +99,30 @@ async function retroactivelyApplyTemplate(
       // Use a subquery (not JOIN) for the partitioned events table — more
       // reliable and allows PostgreSQL to prune partitions efficiently.
       // Cast events.id (UUID) to text — event_scores.event_id is VARCHAR(255).
-      const windowEventIds = db('events')
-        .select(db.raw('id::text'))
-        .where('system_id', w.system_id)
-        .where('timestamp', '>=', w.from_ts)
-        .where('timestamp', '<=', w.to_ts);
+      // Also exclude events matching ANY enabled normal behavior template
+      // (not just the one being created) for full consistency with the
+      // drill-down and recalcEffectiveScores filters.
+      const maxRow = await db.raw(`
+        SELECT COALESCE(MAX(es.score), 0) AS max_score
+        FROM event_scores es
+        JOIN events e ON e.id::text = es.event_id
+        WHERE e.system_id = ?
+          AND e.timestamp >= ?
+          AND e.timestamp <= ?
+          AND es.criterion_id = ?
+          AND es.score_type = 'event'
+          AND e.acknowledged_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM normal_behavior_templates nbt
+            WHERE nbt.enabled = true
+              AND (nbt.system_id IS NULL OR nbt.system_id = e.system_id)
+              AND e.message ~* nbt.pattern
+              AND (nbt.host_pattern IS NULL OR e.host ~* nbt.host_pattern)
+              AND (nbt.program_pattern IS NULL OR e.program ~* nbt.program_pattern)
+          )
+      `, [w.system_id, w.from_ts, w.to_ts, criterion.id]);
 
-      const maxRow = await db('event_scores')
-        .whereIn('event_id', windowEventIds)
-        .where('criterion_id', criterion.id)
-        .max('score as max_score')
-        .first();
-
-      const newMaxEvent = Number(maxRow?.max_score ?? 0);
+      const newMaxEvent = Number(maxRow?.rows?.[0]?.max_score ?? 0);
       let metaScore = Number(existing.meta_score) || 0;
 
       // If ALL events in this window now have score 0 for this criterion,

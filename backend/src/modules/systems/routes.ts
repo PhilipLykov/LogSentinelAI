@@ -41,7 +41,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
     '/api/v1/systems',
     { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
-      const { name, description, retention_days, event_source, es_connection_id, es_config } = request.body ?? {} as any;
+      const { name, description, retention_days, event_source, es_connection_id, es_config, tz_offset_minutes } = request.body ?? {} as any;
 
       if (!name || typeof name !== 'string' || name.trim().length === 0) {
         return reply.code(400).send({ error: '"name" is required and must be a non-empty string.' });
@@ -70,6 +70,16 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       const id = uuidv4();
       const now = new Date().toISOString();
 
+      // Validate tz_offset_minutes if provided
+      let tzOffsetValue: number | null = null;
+      if (tz_offset_minutes !== undefined && tz_offset_minutes !== null) {
+        const tz = Number(tz_offset_minutes);
+        if (!Number.isFinite(tz) || tz < -1440 || tz > 1440) {
+          return reply.code(400).send({ error: '"tz_offset_minutes" must be between -1440 and 1440.' });
+        }
+        tzOffsetValue = tz;
+      }
+
       await db('monitored_systems').insert({
         id,
         name: name.trim(),
@@ -78,6 +88,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         event_source: effectiveSource,
         es_connection_id: effectiveSource === 'elasticsearch' ? (es_connection_id ?? null) : null,
         es_config: es_config ? JSON.stringify(es_config) : null,
+        tz_offset_minutes: tzOffsetValue,
         created_at: now,
         updated_at: now,
       });
@@ -108,7 +119,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       const existing = await db('monitored_systems').where({ id }).first();
       if (!existing) return reply.code(404).send({ error: 'System not found' });
 
-      const { name, description, retention_days, event_source, es_connection_id, es_config } = request.body ?? {} as any;
+      const { name, description, retention_days, event_source, es_connection_id, es_config, tz_offset_minutes } = request.body ?? {} as any;
       const updates: Record<string, any> = { updated_at: new Date().toISOString() };
 
       if (name !== undefined) {
@@ -129,6 +140,17 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
             return reply.code(400).send({ error: '"retention_days" must be 0–3650 (0 = keep forever, null = use global default).' });
           }
           updates.retention_days = rd;
+        }
+      }
+      if (tz_offset_minutes !== undefined) {
+        if (tz_offset_minutes === null) {
+          updates.tz_offset_minutes = null;
+        } else {
+          const tz = Number(tz_offset_minutes);
+          if (!Number.isFinite(tz) || tz < -1440 || tz > 1440) {
+            return reply.code(400).send({ error: '"tz_offset_minutes" must be between -1440 and 1440 (or null).' });
+          }
+          updates.tz_offset_minutes = tz;
         }
       }
 

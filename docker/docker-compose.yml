@@ -95,6 +95,12 @@ services:
       - INGEST_API_KEY=${INGEST_API_KEY:-}
       # Fluent Bit log level (error, warn, info, debug, trace)
       - LOG_LEVEL=${COLLECTOR_LOG_LEVEL:-info}
+      # Timezone: RFC 3164 syslog timestamps have NO timezone info.
+      # Fluent Bit interprets them in the container's local time.
+      # Set this to match the timezone of the MAJORITY of your syslog
+      # sources.  For sources in other timezones, use the per-system
+      # tz_offset setting in the LogSentinel AI dashboard.
+      - TZ=${TZ:-Europe/Chisinau}
     volumes:
       - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
       - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro

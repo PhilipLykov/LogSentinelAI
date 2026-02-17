@@ -385,6 +385,7 @@ export interface MonitoredSystem {
   name: string;
   description: string;
   retention_days: number | null;
+  tz_offset_minutes?: number | null;
   event_source?: 'postgresql' | 'elasticsearch';
   es_config?: Record<string, unknown> | null;
   es_connection_id?: string | null;
@@ -545,6 +546,7 @@ export async function createSystem(data: {
   name: string;
   description?: string;
   retention_days?: number | null;
+  tz_offset_minutes?: number | null;
   event_source?: string;
   es_connection_id?: string | null;
   es_config?: Record<string, unknown> | null;
@@ -561,6 +563,7 @@ export async function updateSystem(
     name?: string;
     description?: string;
     retention_days?: number | null;
+    tz_offset_minutes?: number | null;
     event_source?: string;
     es_connection_id?: string | null;
     es_config?: Record<string, unknown> | null;
@@ -1351,6 +1354,7 @@ export interface PipelineConfig {
   scoring_limit_per_run: number;
   effective_score_meta_weight: number;
   multiline_reassembly: boolean;
+  max_future_drift_seconds: number;
 }
 
 export interface PipelineConfigResponse {

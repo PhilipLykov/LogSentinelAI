@@ -6,6 +6,7 @@ interface SystemFormProps {
   initialName?: string;
   initialDescription?: string;
   initialRetentionDays?: number | null;
+  initialTzOffsetMinutes?: number | null;
   initialEventSource?: 'postgresql' | 'elasticsearch';
   initialEsConnectionId?: string | null;
   initialEsConfig?: Record<string, unknown> | null;
@@ -18,16 +19,55 @@ export interface SystemFormData {
   name: string;
   description: string;
   retention_days: number | null;
+  tz_offset_minutes: number | null;
   event_source: 'postgresql' | 'elasticsearch';
   es_connection_id: string | null;
   es_config: Record<string, unknown> | null;
 }
+
+/** Common UTC timezone offsets for the dropdown. */
+const TZ_OFFSETS = [
+  { value: '', label: 'None (use server default)' },
+  { value: '-720', label: 'UTC-12:00' },
+  { value: '-660', label: 'UTC-11:00' },
+  { value: '-600', label: 'UTC-10:00 (Hawaii)' },
+  { value: '-540', label: 'UTC-09:00 (Alaska)' },
+  { value: '-480', label: 'UTC-08:00 (Pacific)' },
+  { value: '-420', label: 'UTC-07:00 (Mountain)' },
+  { value: '-360', label: 'UTC-06:00 (Central US)' },
+  { value: '-300', label: 'UTC-05:00 (Eastern US)' },
+  { value: '-240', label: 'UTC-04:00 (Atlantic)' },
+  { value: '-210', label: 'UTC-03:30 (Newfoundland)' },
+  { value: '-180', label: 'UTC-03:00 (Brazil)' },
+  { value: '-120', label: 'UTC-02:00' },
+  { value: '-60', label: 'UTC-01:00' },
+  { value: '0', label: 'UTC+00:00 (GMT)' },
+  { value: '60', label: 'UTC+01:00 (CET)' },
+  { value: '120', label: 'UTC+02:00 (EET)' },
+  { value: '180', label: 'UTC+03:00 (Moscow)' },
+  { value: '210', label: 'UTC+03:30 (Tehran)' },
+  { value: '240', label: 'UTC+04:00 (Dubai)' },
+  { value: '270', label: 'UTC+04:30 (Kabul)' },
+  { value: '300', label: 'UTC+05:00 (Karachi)' },
+  { value: '330', label: 'UTC+05:30 (India)' },
+  { value: '345', label: 'UTC+05:45 (Nepal)' },
+  { value: '360', label: 'UTC+06:00 (Dhaka)' },
+  { value: '420', label: 'UTC+07:00 (Bangkok)' },
+  { value: '480', label: 'UTC+08:00 (Singapore)' },
+  { value: '540', label: 'UTC+09:00 (Tokyo)' },
+  { value: '570', label: 'UTC+09:30 (Adelaide)' },
+  { value: '600', label: 'UTC+10:00 (Sydney)' },
+  { value: '660', label: 'UTC+11:00' },
+  { value: '720', label: 'UTC+12:00 (Auckland)' },
+  { value: '780', label: 'UTC+13:00 (Samoa)' },
+];
 
 export function SystemForm({
   title,
   initialName = '',
   initialDescription = '',
   initialRetentionDays = null,
+  initialTzOffsetMinutes = null,
   initialEventSource = 'postgresql',
   initialEsConnectionId = null,
   initialEsConfig = null,
@@ -42,6 +82,9 @@ export function SystemForm({
   );
   const [retentionDays, setRetentionDays] = useState<string>(
     initialRetentionDays !== null && initialRetentionDays !== undefined ? String(initialRetentionDays) : '',
+  );
+  const [tzOffset, setTzOffset] = useState<string>(
+    initialTzOffsetMinutes !== null && initialTzOffsetMinutes !== undefined ? String(initialTzOffsetMinutes) : '',
   );
   const [nameError, setNameError] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
@@ -108,10 +151,13 @@ export function SystemForm({
       };
     }
 
+    const finalTzOffset: number | null = tzOffset !== '' ? Number(tzOffset) : null;
+
     onSave({
       name: trimmed,
       description: description.trim(),
       retention_days: finalRetention,
+      tz_offset_minutes: Number.isFinite(finalTzOffset) ? finalTzOffset : null,
       event_source: eventSource,
       es_connection_id: eventSource === 'elasticsearch' ? esConnectionId : null,
       es_config: esConfig,
@@ -302,6 +348,29 @@ export function SystemForm({
               {eventSource === 'elasticsearch'
                 ? 'For Elasticsearch systems, this controls how long AI analysis metadata is retained locally.'
                 : 'How long to keep events for this system. Set to 0 to keep forever.'}
+            </span>
+          </div>
+
+          {/* ── Timezone Offset ── */}
+          <div className="form-group">
+            <label htmlFor="tz-offset">Source Timezone Offset</label>
+            <select
+              id="tz-offset"
+              className="form-input"
+              value={tzOffset}
+              onChange={(e) => setTzOffset(e.target.value)}
+              style={{ maxWidth: '320px' }}
+            >
+              {TZ_OFFSETS.map((tz) => (
+                <option key={tz.value} value={tz.value}>
+                  {tz.label}
+                </option>
+              ))}
+            </select>
+            <span className="field-hint" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+              Corrects RFC 3164 syslog timestamps that have no timezone info.
+              Set this to the difference between the source&apos;s timezone and the Fluent Bit
+              container&apos;s timezone. Leave &quot;None&quot; if both are the same.
             </span>
           </div>
 

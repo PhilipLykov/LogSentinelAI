@@ -1081,6 +1081,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     scoring_limit_per_run: 500,
     effective_score_meta_weight: 0.7,
     multiline_reassembly: true,
+    max_future_drift_seconds: 300,  // 5 minutes — events further in the future are clamped to now
   };
 
   /** GET /api/v1/pipeline-config — return current pipeline config with defaults. */
@@ -1139,6 +1140,13 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         if (typeof body.multiline_reassembly !== 'boolean') {
           return reply.code(400).send({ error: 'multiline_reassembly must be a boolean.' });
         }
+      }
+      if (body.max_future_drift_seconds !== undefined) {
+        const v = Number(body.max_future_drift_seconds);
+        if (!Number.isFinite(v) || v < 0 || v > 86400) {
+          return reply.code(400).send({ error: 'max_future_drift_seconds must be 0–86400.' });
+        }
+        body.max_future_drift_seconds = v;
       }
 
       try {
