@@ -43,6 +43,14 @@ function parameterizeMessage(msg: string): string {
   result = result.replace(/"[^"]*"/g, '"<STR>"');
   result = result.replace(/'[^']*'/g, "'<STR>'");
 
+  // Normalize PostgreSQL STATEMENT lines: collapse WHERE/ORDER BY/LIMIT/etc.
+  // so that the same query against the same table groups regardless of clause variations.
+  // Matches "STATEMENT:  <sql>" (PostgreSQL uses two spaces after STATEMENT:).
+  result = result.replace(
+    /STATEMENT:\s+(select|insert|update|delete)\b(.*?)\b(where|order\s+by|limit|offset|group\s+by|having|returning|on\s+conflict)\b.*/gi,
+    (_, verb, middle) => `STATEMENT: ${verb}${middle}<SQL_CLAUSES>`,
+  );
+
   return result;
 }
 
