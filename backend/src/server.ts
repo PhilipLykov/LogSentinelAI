@@ -45,8 +45,7 @@ async function main(): Promise<void> {
   // 4. Start pipeline scheduler — always starts, checks AI config dynamically
   //    (API key may come from env or DB, and can be set/changed via UI at runtime)
   const llm = new OpenAiAdapter();
-  const intervalMs = envIntervalMs(process.env.PIPELINE_INTERVAL_MS, 5 * 60 * 1000);
-  const pipelineScheduler = startPipelineScheduler(db, llm, intervalMs);
+  const pipelineScheduler = startPipelineScheduler(db, llm);
 
   // 5. Start connector poll scheduler
   const connectorIntervalMs = envIntervalMs(process.env.CONNECTOR_POLL_INTERVAL_MS, 60_000);

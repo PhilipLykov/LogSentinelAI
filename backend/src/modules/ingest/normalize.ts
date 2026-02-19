@@ -1,6 +1,45 @@
 import { createHash } from 'node:crypto';
 import type { IngestEntry, NormalizedEvent } from '../../types/index.js';
 
+/** Pino/Bunyan numeric log levels → canonical severity names. */
+const PINO_LEVEL_MAP: Record<number, string> = {
+  10: 'debug', 20: 'debug', 30: 'info', 40: 'warning', 50: 'error', 60: 'critical',
+};
+
+/**
+ * Try to parse a JSON message body and extract severity + human-readable message.
+ * Handles Pino, Bunyan, Winston, and generic structured loggers.
+ * Returns null if the message is not JSON or extraction fails.
+ */
+function tryParseJsonMessage(message: string): { severity?: string; message?: string } | null {
+  const trimmed = message.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+
+  try {
+    const obj = JSON.parse(trimmed);
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return null;
+
+    const result: { severity?: string; message?: string } = {};
+
+    const levelVal = obj.level ?? obj.severity ?? obj.loglevel ?? obj.lvl;
+    if (typeof levelVal === 'number') {
+      result.severity = PINO_LEVEL_MAP[levelVal] ?? (levelVal <= 7 ? syslogSeverityToString(levelVal) : undefined);
+    } else if (typeof levelVal === 'string' && levelVal.trim().length > 0) {
+      const lower = levelVal.toLowerCase().trim();
+      result.severity = SEVERITY_CANONICAL[lower] ?? lower;
+    }
+
+    const msgVal = obj.msg ?? obj.message ?? obj.text;
+    if (typeof msgVal === 'string' && msgVal.trim().length > 0) {
+      result.message = msgVal.trim();
+    }
+
+    return (result.severity || result.message) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Normalize a raw ingest entry into the internal event schema.
  * Supports common shapes: syslog-style, GELF, flat key-value.
@@ -12,6 +51,10 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
   if (!message || typeof message !== 'string' || message.trim().length === 0) {
     return null;
   }
+
+  // Try to unpack JSON structured logs (Pino, Bunyan, Winston)
+  const jsonParsed = tryParseJsonMessage(message);
+  const effectiveMessage = jsonParsed?.message ?? message;
 
   // Resolve timestamp: try multiple common field names
   let timestamp = entry.timestamp ?? (entry as any).time ?? (entry as any)['@timestamp'];
@@ -102,6 +145,11 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     }
   }
 
+  // Step 5: JSON message body severity (Pino/Bunyan/Winston structured logs)
+  if (severity === undefined && jsonParsed?.severity) {
+    severity = jsonParsed.severity;
+  }
+
   // Final normalization: convert numbers to names, lowercase strings,
   // and map aliases (err→error, warn→warning, etc.) to canonical forms.
   // Also handle numeric strings like "7" (common with rsyslog omhttp / Fluent Bit).
@@ -162,7 +210,7 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
 
   // Content-based severity enrichment: upgrade if message body
   // indicates a higher severity than the syslog header provided.
-  const enrichedSeverity = enrichSeverityFromContent(message.trim(), severity);
+  const enrichedSeverity = enrichSeverityFromContent(effectiveMessage.trim(), severity);
 
   // Clean source_ip: Fluent Bit's source_address_key produces transport
   // addresses like "udp://192.168.30.14:52502" or "tcp://10.0.0.1:44321".
@@ -182,7 +230,7 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
 
   return {
     timestamp,
-    message: message.trim(),
+    message: effectiveMessage.trim(),
     severity: enrichedSeverity ?? undefined,
     host,
     source_ip,
@@ -519,6 +567,36 @@ const CONTENT_SEVERITY_RULES: { severity: string; patterns: RegExp[] }[] = [
       /\bShouldRestart failed\b/i,
     ],
   },
+  // ── Notice ─────────────────────────────────────────
+  {
+    severity: 'notice',
+    patterns: [
+      /\blevel\s*[=:]\s*"?notice\b/i,
+      /"(?:severity|level)"\s*:\s*"notice"/i,
+      /\bNOTICE\s*[:\]|>]/,
+    ],
+  },
+  // ── Info ────────────────────────────────────────────
+  {
+    severity: 'info',
+    patterns: [
+      /\blevel\s*[=:]\s*"?(?:info|informational)\b/i,
+      /"(?:severity|level)"\s*:\s*"(?:info|informational)"/i,
+      /\bINFO\s*[:\]|>]/,
+      /"level"\s*:\s*30\b/,
+    ],
+  },
+  // ── Debug ──────────────────────────────────────────
+  {
+    severity: 'debug',
+    patterns: [
+      /\blevel\s*[=:]\s*"?(?:debug|trace)\b/i,
+      /"(?:severity|level)"\s*:\s*"(?:debug|trace)"/i,
+      /\bDEBUG\s*[:\]|>]/,
+      /\bTRACE\s*[:\]|>]/,
+      /"level"\s*:\s*[12]0\b/,
+    ],
+  },
 ];
 
 /**
@@ -554,8 +632,8 @@ function enrichSeverityFromContent(
     }
   }
 
-  // Only upgrade — never downgrade
-  if (bestContentSeverity && bestContentPriority < headerPriority) {
+  // Upgrade from header, or SET when header was absent (undefined)
+  if (bestContentSeverity && (bestContentPriority < headerPriority || headerSeverity === undefined)) {
     return bestContentSeverity;
   }
 

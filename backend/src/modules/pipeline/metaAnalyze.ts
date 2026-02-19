@@ -52,8 +52,8 @@ export interface MetaAnalysisConfig {
 
 const META_CONFIG_DEFAULTS: MetaAnalysisConfig = {
   finding_dedup_enabled: true,
-  finding_dedup_threshold: 0.6,
-  max_new_findings_per_window: 3,
+  finding_dedup_threshold: 0.5,
+  max_new_findings_per_window: 5,
   auto_resolve_after_misses: 0,        // Disabled — auto-resolve by time is removed
   severity_decay_enabled: false,        // Disabled — severity only changes with evidence
   severity_decay_after_occurrences: 10,
@@ -122,7 +122,7 @@ export async function metaAnalyzeWindow(
   db: Knex,
   llm: LlmAdapter,
   windowId: string,
-  options?: { wMeta?: number; excludeAcknowledged?: boolean },
+  options?: { wMeta?: number; excludeAcknowledged?: boolean; resetContext?: boolean; maxEvents?: number },
 ): Promise<void> {
   const wMeta = options?.wMeta ?? DEFAULT_W_META;
 
@@ -148,10 +148,12 @@ export async function metaAnalyzeWindow(
   // ── Resolve token optimisation config ───────────────────
   const tokenOpt = await loadTokenOptConfig(db);
   const metaMaxEvents = Math.max(10, Math.min(tokenOpt.meta_max_events, 2000));
+  const effectiveMaxEvents = options?.maxEvents ? Math.max(10, Math.min(options.maxEvents, 10000)) : metaMaxEvents;
   const prioritizeHighScores = tokenOpt.meta_prioritize_high_scores;
 
   // ── Resolve meta-analysis config ────────────────────────
   const metaCfg = await loadMetaAnalysisConfig(db);
+  const contextWindowSize = options?.resetContext ? 0 : metaCfg.context_window_size;
 
   // ── Resolve event ack config ────────────────────────────
   const ackRows = await db('app_config')
@@ -179,7 +181,7 @@ export async function metaAnalyzeWindow(
     window.from_ts,
     window.to_ts,
     {
-      limit: metaMaxEvents,
+      limit: effectiveMaxEvents,
       excludeAcknowledged: effectiveExcludeAcked,
     },
   );
@@ -301,7 +303,7 @@ export async function metaAnalyzeWindow(
 
       // Still process finding lifecycle (check dormancy for open findings)
       // but skip the LLM call and finding creation
-      const context = await buildMetaContext(db, system.id, windowId, metaCfg.context_window_size ?? DEFAULT_CONTEXT_WINDOW_SIZE);
+      const context = await buildMetaContext(db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE);
       if (context.openFindings.length > 0) {
         // Increment consecutive_misses for all open findings (none were seen)
         await db('findings')
@@ -447,8 +449,7 @@ export async function metaAnalyzeWindow(
   }
 
   // ── Build historical context (sliding window) ───────────
-  const contextWindowSize = metaCfg.context_window_size ?? DEFAULT_CONTEXT_WINDOW_SIZE;
-  const context = await buildMetaContext(db, system.id, windowId, contextWindowSize);
+  const context = await buildMetaContext(db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE);
 
   // ── Normal-behavior awareness for LLM context ─────────
   // 1. Auto-resolve open findings whose text matches a normal-behavior template.

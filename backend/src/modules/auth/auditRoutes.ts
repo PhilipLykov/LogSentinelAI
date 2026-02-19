@@ -69,7 +69,7 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
         countQuery = countQuery.where('at', '<=', request.query.to);
       }
       if (request.query.search) {
-        const term = `%${request.query.search}%`;
+        const term = `%${escapeLike(request.query.search)}%`;
         query = query.where(function () {
           this.where('action', 'ilike', term)
             .orWhere('resource_type', 'ilike', term)
@@ -179,11 +179,21 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
     '/api/v1/audit-log/actions',
     { preHandler: requireAuth(PERMISSIONS.AUDIT_VIEW) },
     async (_request, reply) => {
-      const actions = await db('audit_log').distinct('action').orderBy('action');
-      const resourceTypes = await db('audit_log').distinct('resource_type').orderBy('resource_type');
+      const [actions, resourceTypes, actorRows] = await Promise.all([
+        db('audit_log').distinct('action').orderBy('action'),
+        db('audit_log').distinct('resource_type').orderBy('resource_type'),
+        db('audit_log')
+          .whereNotNull('actor')
+          .where('actor', '!=', '')
+          .distinct('actor')
+          .orderBy('actor')
+          .select('actor'),
+      ]);
+      const actors = actorRows.map((r: any) => r.actor);
       return reply.send({
         actions: actions.map((r: any) => r.action),
         resource_types: resourceTypes.map((r: any) => r.resource_type),
+        actors,
       });
     },
   );

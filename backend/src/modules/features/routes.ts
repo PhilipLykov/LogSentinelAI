@@ -997,6 +997,8 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
   const DASHBOARD_CONFIG_DEFAULTS: Record<string, unknown> = {
     score_display_window_days: 7,
+    reeval_window_days: 7,
+    reeval_max_events: 500,
   };
 
   /** GET /api/v1/dashboard-config — return current dashboard config with defaults. */
@@ -1031,6 +1033,18 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         const v = Number(body.score_display_window_days);
         if (!Number.isFinite(v) || v < 1 || v > 90) {
           return reply.code(400).send({ error: 'score_display_window_days must be 1–90.' });
+        }
+      }
+      if (body.reeval_window_days !== undefined) {
+        const v = Number(body.reeval_window_days);
+        if (!Number.isFinite(v) || v < 1 || v > 90) {
+          return reply.code(400).send({ error: 'reeval_window_days must be 1–90.' });
+        }
+      }
+      if (body.reeval_max_events !== undefined) {
+        const v = Number(body.reeval_max_events);
+        if (!Number.isFinite(v) || v < 50 || v > 10000) {
+          return reply.code(400).send({ error: 'reeval_max_events must be 50–10000.' });
         }
       }
 
@@ -1076,12 +1090,14 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   // ── Pipeline Config (interval, window size, scoring limit, meta weight) ──
 
   const PIPELINE_CONFIG_DEFAULTS: Record<string, unknown> = {
-    pipeline_interval_minutes: 5,
+    pipeline_min_interval_minutes: 15,
+    pipeline_max_interval_minutes: 120,
     window_minutes: 5,
     scoring_limit_per_run: 500,
     effective_score_meta_weight: 0.7,
     multiline_reassembly: true,
     max_future_drift_seconds: 300,  // 5 minutes — events further in the future are clamped to now
+    max_event_message_length: 8192,
   };
 
   /** GET /api/v1/pipeline-config — return current pipeline config with defaults. */
@@ -1112,10 +1128,16 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     async (request, reply) => {
       const body = (request.body as any) ?? {};
 
-      if (body.pipeline_interval_minutes !== undefined) {
-        const v = Number(body.pipeline_interval_minutes);
+      if (body.pipeline_min_interval_minutes !== undefined) {
+        const v = Number(body.pipeline_min_interval_minutes);
         if (!Number.isFinite(v) || v < 1 || v > 60) {
-          return reply.code(400).send({ error: 'pipeline_interval_minutes must be 1–60.' });
+          return reply.code(400).send({ error: 'pipeline_min_interval_minutes must be 1–60.' });
+        }
+      }
+      if (body.pipeline_max_interval_minutes !== undefined) {
+        const v = Number(body.pipeline_max_interval_minutes);
+        if (!Number.isFinite(v) || v < 5 || v > 1440) {
+          return reply.code(400).send({ error: 'pipeline_max_interval_minutes must be 5–1440.' });
         }
       }
       if (body.window_minutes !== undefined) {
@@ -1148,6 +1170,13 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         }
         body.max_future_drift_seconds = v;
       }
+      if (body.max_event_message_length !== undefined) {
+        const v = Number(body.max_event_message_length);
+        if (!Number.isFinite(v) || v < 256 || v > 65536) {
+          return reply.code(400).send({ error: 'max_event_message_length must be 256–65536.' });
+        }
+        body.max_event_message_length = v;
+      }
 
       try {
         const existing = await db('app_config').where({ key: 'pipeline_config' }).first('value');
@@ -1162,6 +1191,13 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           if (body[key] !== undefined) {
             current[key] = body[key];
           }
+        }
+
+        // Cross-validate min/max after merging with existing config
+        const mergedMin = Number(current.pipeline_min_interval_minutes) || 15;
+        const mergedMax = Number(current.pipeline_max_interval_minutes) || 120;
+        if (mergedMax < mergedMin) {
+          return reply.code(400).send({ error: 'pipeline_max_interval_minutes must be >= pipeline_min_interval_minutes.' });
         }
 
         await db.raw(`

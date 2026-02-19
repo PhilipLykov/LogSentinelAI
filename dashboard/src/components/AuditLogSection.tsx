@@ -23,6 +23,7 @@ export function AuditLogSection({ onAuthError }: Props) {
   const [limit] = useState(50);
   const [actionFilter, setActionFilter] = useState('');
   const [resourceFilter, setResourceFilter] = useState('');
+  const [actorFilter, setActorFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -30,6 +31,7 @@ export function AuditLogSection({ onAuthError }: Props) {
   // Filter options
   const [actions, setActions] = useState<string[]>([]);
   const [resourceTypes, setResourceTypes] = useState<string[]>([]);
+  const [actors, setActors] = useState<string[]>([]);
 
   // Expanded row
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -42,6 +44,7 @@ export function AuditLogSection({ onAuthError }: Props) {
         limit,
         action: actionFilter || undefined,
         resource_type: resourceFilter || undefined,
+        actor: actorFilter || undefined,
         search: searchTerm || undefined,
         from: euToIso(fromDate) || undefined,
         to: euToIso(toDate) || undefined,
@@ -54,13 +57,14 @@ export function AuditLogSection({ onAuthError }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, actionFilter, resourceFilter, searchTerm, fromDate, toDate, onAuthError]);
+  }, [page, limit, actionFilter, resourceFilter, actorFilter, searchTerm, fromDate, toDate, onAuthError]);
 
   const loadFilters = useCallback(async () => {
     try {
       const result = await fetchAuditLogActions();
       setActions(result.actions);
       setResourceTypes(result.resource_types);
+      setActors(result.actors ?? []);
     } catch {
       // Non-critical
     }
@@ -153,6 +157,13 @@ export function AuditLogSection({ onAuthError }: Props) {
           </select>
         </div>
         <div className="admin-filter-group">
+          <label>Actor</label>
+          <select value={actorFilter} onChange={(e) => { setActorFilter(e.target.value); setPage(1); }}>
+            <option value="">All Actors</option>
+            {actors.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
+        <div className="admin-filter-group">
           <label>From</label>
           <EuDateInput value={fromDate} onChange={(v) => { setFromDate(v); setPage(1); }} />
         </div>
@@ -165,6 +176,7 @@ export function AuditLogSection({ onAuthError }: Props) {
             setSearchTerm('');
             setActionFilter('');
             setResourceFilter('');
+            setActorFilter('');
             setFromDate('');
             setToDate('');
             setPage(1);

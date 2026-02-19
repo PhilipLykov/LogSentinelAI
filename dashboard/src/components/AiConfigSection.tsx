@@ -1474,15 +1474,27 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                   How often the AI analysis pipeline runs and how large each analysis window is.
                 </span>
                 <div className="tok-opt-row">
-                  <label>Pipeline interval (minutes)</label>
+                  <label>Min interval (active)</label>
                   <NumericInput
                     min={1} max={60} step={1}
-                    value={pipeCfg.pipeline_interval_minutes}
-                    onChange={(v) => setPipeCfg({ ...pipeCfg, pipeline_interval_minutes: v })}
+                    value={pipeCfg.pipeline_min_interval_minutes}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, pipeline_min_interval_minutes: v })}
                     style={{ width: 90 }}
                   />
                   <span className="form-hint">
-                    How often the pipeline runs. Lower = more responsive but more LLM calls. Default: 5 min.
+                    Minimum pipeline interval when events are actively arriving (minutes). Default: 5 min.
+                  </span>
+                </div>
+                <div className="tok-opt-row">
+                  <label>Max interval (idle)</label>
+                  <NumericInput
+                    min={5} max={1440} step={1}
+                    value={pipeCfg.pipeline_max_interval_minutes}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, pipeline_max_interval_minutes: v })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    Maximum pipeline interval when idle / no new events (minutes). Default: 60 min.
                   </span>
                 </div>
                 <div className="tok-opt-row">
@@ -1552,6 +1564,18 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                   />
                   <span className="form-hint">
                     Events with timestamps further into the future than this are clamped to the current time. Prevents clock-skew and timezone errors from polluting data. Set to 0 to disable. Default: 300 (5 min).
+                  </span>
+                </div>
+                <div className="tok-opt-row">
+                  <label>Max event message length</label>
+                  <NumericInput
+                    min={256} max={65536} step={256}
+                    value={pipeCfg.max_event_message_length ?? 8192}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, max_event_message_length: v })}
+                    style={{ width: 110 }}
+                  />
+                  <span className="form-hint">
+                    Characters (256–65536). Messages longer than this are truncated during ingestion. Default: 8192.
                   </span>
                 </div>
               </fieldset>

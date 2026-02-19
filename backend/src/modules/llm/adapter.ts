@@ -367,17 +367,17 @@ RESOLUTION RULES (STRICT — read carefully):
 ACKNOWLEDGED FINDINGS:
 Findings marked [ACK] have been acknowledged by an operator. Do NOT create new findings for issues already tracked by acknowledged findings. You may still resolve them if there is strong event evidence the issue is fixed.
 
-NEW FINDING CREATION — HIGH BAR:
-- Only create a finding when you would page a senior engineer about it.
+NEW FINDING CREATION:
+- Create a finding for any issue that a system administrator should investigate.
 - A finding must be ACTIONABLE: the user should know what to investigate.
-- Zero new findings is the EXPECTED outcome for most routine windows.
-- Maximum 3 new findings per window. If you have more, keep only the most critical ones.
+- When ANY criterion has a meta_score >= 0.3, you MUST create at least one finding explaining the elevated score.
+- Maximum 5 new findings per window. If you have more, keep only the most critical ones.
 - Never create findings for routine operational events, expected patterns, or minor variations of normal behavior.
 - Each finding should reference specific events from the current window where possible.
 - Only create a new finding for an issue that is NOT already tracked by any open or acknowledged finding.
 
 IMPORTANT RULES:
-- Zero new findings is perfectly acceptable when nothing genuinely new has occurred. Quality over quantity.
+- Zero new findings is acceptable ONLY when all criterion meta_scores are below 0.3 and no new issues are present.
 - Be conservative with severity. Most operational events are "low" or "info". Reserve "critical" and "high" for genuine service-impacting issues with clear evidence.
 - Be specific and actionable. Reference event patterns, hosts, programs, or error messages where relevant.
 - Use the finding metadata (age, occurrence count) to make informed decisions about trends and persistence.

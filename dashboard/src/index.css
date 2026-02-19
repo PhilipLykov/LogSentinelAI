@@ -630,6 +630,8 @@ input:focus-visible,
 .criterion-event-row:hover .criterion-message-cell {
   white-space: normal;
   word-break: break-word;
+  max-height: 6em;
+  overflow-y: auto;
 }
 .criterion-message-clickable {
   cursor: pointer;
@@ -6030,4 +6032,12 @@ tr.event-row-acked:hover {
   display: flex;
   gap: 10px;
   margin-top: 24px;
+}
+
+/* ── DrillDown section divider ───────────────────────── */
+
+.drilldown-section-divider {
+  border: none;
+  border-top: 2px solid var(--border);
+  margin: 24px 0;
 }

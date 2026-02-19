@@ -104,6 +104,10 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
         ? pipelineCfg.max_future_drift_seconds
         : 300; // default: 5 minutes
 
+      const maxEventMsgLen = typeof pipelineCfg.max_event_message_length === 'number'
+        ? pipelineCfg.max_event_message_length
+        : 8192;
+
       // Pre-load per-system timezone offsets (one lightweight query per batch)
       const tzOffsetMap = new Map<string, number>();
       try {
@@ -145,6 +149,10 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           rejected++;
           errors.push(`Entry ${i}: missing or empty "message" field.`);
           continue;
+        }
+
+        if (normalized.message.length > maxEventMsgLen) {
+          normalized.message = normalized.message.slice(0, maxEventMsgLen) + ' [...truncated]';
         }
 
         // 1b. Source-IP resolution: ensure source_ip reflects the REAL origin.

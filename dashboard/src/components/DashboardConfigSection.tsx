@@ -26,6 +26,8 @@ export function DashboardConfigSection({ onAuthError }: DashboardConfigSectionPr
 
   // Local form state
   const [windowDays, setWindowDays] = useState(7);
+  const [reevalWindowDays, setReevalWindowDays] = useState(7);
+  const [reevalMaxEvents, setReevalMaxEvents] = useState(500);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -35,6 +37,8 @@ export function DashboardConfigSection({ onAuthError }: DashboardConfigSectionPr
       setConfig(resp.config);
       setDefaults(resp.defaults);
       setWindowDays(resp.config.score_display_window_days);
+      setReevalWindowDays(resp.config.reeval_window_days);
+      setReevalMaxEvents(resp.config.reeval_max_events);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
@@ -58,6 +62,8 @@ export function DashboardConfigSection({ onAuthError }: DashboardConfigSectionPr
     try {
       const resp = await updateDashboardConfig({
         score_display_window_days: windowDays,
+        reeval_window_days: reevalWindowDays,
+        reeval_max_events: reevalMaxEvents,
       });
       setConfig(resp.config);
       setSuccess('Dashboard configuration saved successfully.');
@@ -77,10 +83,16 @@ export function DashboardConfigSection({ onAuthError }: DashboardConfigSectionPr
   const handleReset = () => {
     if (defaults) {
       setWindowDays(defaults.score_display_window_days);
+      setReevalWindowDays(defaults.reeval_window_days);
+      setReevalMaxEvents(defaults.reeval_max_events);
     }
   };
 
-  const isDirty = config ? windowDays !== config.score_display_window_days : false;
+  const isDirty = config
+    ? windowDays !== config.score_display_window_days
+      || reevalWindowDays !== config.reeval_window_days
+      || reevalMaxEvents !== config.reeval_max_events
+    : false;
 
   if (loading) {
     return (
@@ -132,6 +144,48 @@ export function DashboardConfigSection({ onAuthError }: DashboardConfigSectionPr
             disabled={saving}
           />
           <span className="config-unit">days</span>
+        </div>
+      </div>
+
+      <div className="config-form-group">
+        <label className="config-label" htmlFor="reeval-window-days">
+          Re-evaluate time window (days)
+          <span className="config-hint">
+            How many days of events to include when re-evaluating a system.
+            Range: 1–90 days. Default: {defaults?.reeval_window_days ?? 7}.
+          </span>
+        </label>
+        <div className="config-input-row">
+          <NumericInput
+            value={reevalWindowDays}
+            onChange={setReevalWindowDays}
+            min={1}
+            max={90}
+            className="config-input config-input-short"
+            disabled={saving}
+          />
+          <span className="config-unit">days</span>
+        </div>
+      </div>
+
+      <div className="config-form-group">
+        <label className="config-label" htmlFor="reeval-max-events">
+          Re-evaluate max events
+          <span className="config-hint">
+            Maximum number of events to include in a single re-evaluation run.
+            Range: 50–10000. Default: {defaults?.reeval_max_events ?? 500}.
+          </span>
+        </label>
+        <div className="config-input-row">
+          <NumericInput
+            value={reevalMaxEvents}
+            onChange={setReevalMaxEvents}
+            min={50}
+            max={10000}
+            className="config-input config-input-short"
+            disabled={saving}
+          />
+          <span className="config-unit">events</span>
         </div>
       </div>
 

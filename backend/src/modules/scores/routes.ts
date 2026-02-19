@@ -323,7 +323,6 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       groupQuery
         .groupByRaw(`
           COALESCE(events.template_id::text, events.id::text),
-          events.message,
           events.severity,
           events.program,
           criteria.slug,
@@ -333,7 +332,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         .limit(limit)
         .select(
           db.raw(`COALESCE(events.template_id::text, events.id::text) as group_key`),
-          'events.message',
+          db.raw("(ARRAY_AGG(events.message ORDER BY events.timestamp DESC))[1] as message"),
           'events.severity',
           'events.program',
           'criteria.slug as criterion_slug',

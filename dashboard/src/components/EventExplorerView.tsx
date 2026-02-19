@@ -6,12 +6,10 @@ import {
   type EventFacets,
   searchEvents,
   fetchEventFacets,
-  acknowledgeEvents,
-  unacknowledgeEvents,
 } from '../api';
 import { TracePanel } from './TracePanel';
 import { MultiSelect } from './MultiSelect';
-import { EuDateInput, euToIso, todayStartEu, todayEndEu, yearStartEu, nowEu } from './EuDateInput';
+import { EuDateInput, euToIso } from './EuDateInput';
 
 interface Props {
   onAuthError: () => void;
@@ -37,8 +35,6 @@ function formatEuDate(iso: string): string {
     return iso;
   }
 }
-
-// todayStartEu / todayEndEu / yearStartEu / nowEu helpers imported from EuDateInput
 
 // ── Keyword highlighting ──────────────────────────────────────
 
@@ -106,8 +102,8 @@ export function EventExplorerView({ onAuthError }: Props) {
   const [hostFilter, setHostFilter] = useState<string[]>([]);
   const [sourceIpFilter, setSourceIpFilter] = useState<string[]>([]);
   const [programFilter, setProgramFilter] = useState<string[]>([]);
-  const [fromDate, setFromDate] = useState(todayStartEu());
-  const [toDate, setToDate] = useState(todayEndEu());
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [sortBy, setSortBy] = useState('timestamp');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
@@ -148,15 +144,6 @@ export function EventExplorerView({ onAuthError }: Props) {
       setTimeout(() => setCopiedId((prev) => (prev === e.id ? null : prev)), 2000);
     }
   };
-
-  // ── Acknowledge panel ──────────────────────────────────
-  const [showAckPanel, setShowAckPanel] = useState(false);
-  const [ackSystem, setAckSystem] = useState('');
-  const [ackFrom, setAckFrom] = useState(yearStartEu());
-  const [ackTo, setAckTo] = useState(nowEu());
-  const [acking, setAcking] = useState(false);
-  const [ackMsg, setAckMsg] = useState('');
-  const [ackError, setAckError] = useState('');
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const initialLoadDone = useRef(false);
@@ -310,8 +297,8 @@ export function EventExplorerView({ onAuthError }: Props) {
     setHostFilter([]);
     setSourceIpFilter([]);
     setProgramFilter([]);
-    setFromDate(todayStartEu());
-    setToDate(todayEndEu());
+    setFromDate('');
+    setToDate('');
     setSortBy('timestamp');
     setSortDir('desc');
     setPage(1);
@@ -321,74 +308,6 @@ export function EventExplorerView({ onAuthError }: Props) {
   const sortIndicator = (col: string) => {
     if (sortBy !== col) return ' \u21C5';
     return sortDir === 'desc' ? ' \u2193' : ' \u2191';
-  };
-
-  const handleAcknowledge = async () => {
-    const rangeDesc = ackFrom
-      ? `from ${ackFrom} to ${ackTo || 'now'}`
-      : `up to ${ackTo || 'now'}`;
-    const systemDesc = ackSystem
-      ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
-      : 'ALL systems';
-    if (!window.confirm(
-      `Acknowledge all events for ${systemDesc} (${rangeDesc})?\n\n` +
-      'Acknowledged events will be excluded from future LLM scoring.',
-    )) return;
-
-    setAcking(true);
-    setAckMsg('');
-    setAckError('');
-    try {
-      const params: { system_id?: string; from?: string; to?: string } = {};
-      if (ackSystem) params.system_id = ackSystem;
-      const ackFromIso = euToIso(ackFrom);
-      const ackToIso = euToIso(ackTo);
-      if (ackFromIso) params.from = ackFromIso;
-      if (ackToIso) params.to = ackToIso;
-      const res = await acknowledgeEvents(params);
-      setAckMsg(res.message);
-      if (hasSearched) doSearch(page);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('Authentication')) { onAuthError(); return; }
-      setAckError(msg);
-    } finally {
-      setAcking(false);
-    }
-  };
-
-  const handleUnacknowledge = async () => {
-    const rangeDesc = ackFrom
-      ? `from ${ackFrom} to ${ackTo || 'now'}`
-      : `up to ${ackTo || 'now'}`;
-    const systemDesc = ackSystem
-      ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
-      : 'ALL systems';
-    if (!window.confirm(
-      `Un-acknowledge events for ${systemDesc} (${rangeDesc})?\n\n` +
-      'These events will be picked up for LLM scoring on the next pipeline run.',
-    )) return;
-
-    setAcking(true);
-    setAckMsg('');
-    setAckError('');
-    try {
-      const params: { system_id?: string; from?: string; to?: string } = {};
-      if (ackSystem) params.system_id = ackSystem;
-      const unAckFromIso = euToIso(ackFrom);
-      const unAckToIso = euToIso(ackTo);
-      if (unAckFromIso) params.from = unAckFromIso;
-      if (unAckToIso) params.to = unAckToIso;
-      const res = await unacknowledgeEvents(params);
-      setAckMsg(res.message);
-      if (hasSearched) doSearch(page);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('Authentication')) { onAuthError(); return; }
-      setAckError(msg);
-    } finally {
-      setAcking(false);
-    }
   };
 
   const totalPages = result ? Math.ceil(result.total / result.limit) : 0;
@@ -408,7 +327,7 @@ export function EventExplorerView({ onAuthError }: Props) {
             ref={searchInputRef}
             type="text"
             className="ee-search-input"
-            placeholder="Search events... (e.g. error, connection refused, CallID)"
+            placeholder={searchMode === 'fulltext' ? 'Search events (smart)...' : 'Search for exact text...'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -420,8 +339,8 @@ export function EventExplorerView({ onAuthError }: Props) {
             onChange={(e) => setSearchMode(e.target.value as 'fulltext' | 'contains')}
             title="Search mode"
           >
-            <option value="fulltext">Full-text</option>
-            <option value="contains">Contains</option>
+            <option value="fulltext" title="Uses PostgreSQL full-text search with stemming and ranking">Smart search</option>
+            <option value="contains" title="Finds events containing the exact text (case-insensitive)">Exact match</option>
           </select>
           <button className="btn btn-accent" onClick={handleSearch} disabled={loading}>
             {loading ? '...' : 'Search'}
@@ -437,64 +356,8 @@ export function EventExplorerView({ onAuthError }: Props) {
           <button className="btn btn-sm btn-outline" onClick={clearFilters} title="Clear all filters">
             Clear
           </button>
-          <button
-            className={`btn btn-sm ${showAckPanel ? 'btn-accent' : 'btn-outline'}`}
-            onClick={() => setShowAckPanel((p) => !p)}
-            title="Acknowledge events"
-          >
-            Acknowledge
-          </button>
         </div>
       </div>
-
-      {/* ── Acknowledge panel ────────────────────────────── */}
-      {showAckPanel && (
-        <div className="ee-ack-panel">
-          <div className="ee-ack-header">
-            <strong>Acknowledge Events</strong>
-            <span className="ee-ack-hint">
-              Acknowledged events are excluded from LLM scoring. Configure behaviour in Settings &gt; AI Model.
-            </span>
-          </div>
-          <div className="ee-ack-controls">
-            <div className="ee-filter-group">
-              <label>System</label>
-              <select value={ackSystem} onChange={(e) => setAckSystem(e.target.value)}>
-                <option value="">All systems</option>
-                {facets?.systems.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="ee-filter-group">
-              <label>From</label>
-              <EuDateInput value={ackFrom} onChange={setAckFrom} placeholder="DD-MM-YYYY HH:MM" />
-            </div>
-            <div className="ee-filter-group">
-              <label>To (default: now)</label>
-              <EuDateInput value={ackTo} onChange={setAckTo} />
-            </div>
-            <div className="ee-ack-buttons">
-              <button
-                className="btn btn-sm btn-accent"
-                onClick={handleAcknowledge}
-                disabled={acking}
-              >
-                {acking ? 'Processing...' : 'Acknowledge'}
-              </button>
-              <button
-                className="btn btn-sm btn-outline"
-                onClick={handleUnacknowledge}
-                disabled={acking}
-              >
-                Un-acknowledge
-              </button>
-            </div>
-          </div>
-          {ackMsg && <div className="success-msg" role="status">{ackMsg}</div>}
-          {ackError && <div className="error-msg" role="alert">{ackError}</div>}
-        </div>
-      )}
 
       {/* ── Filters ──────────────────────────────────────── */}
       {filtersExpanded && (
@@ -808,6 +671,11 @@ export function EventExplorerView({ onAuthError }: Props) {
                 {' '}(showing {((result.page - 1) * result.limit) + 1}{'\u2013'}{Math.min(result.page * result.limit, result.total)})
               </span>
             )}
+            <span className="ee-date-range">
+              {fromDate || toDate
+                ? ` \u2014 ${fromDate ? `from ${fromDate}` : ''}${fromDate && toDate ? ' ' : ''}${toDate ? `to ${toDate}` : ''}`
+                : ' \u2014 (all time)'}
+            </span>
           </div>
           {totalPages > 1 && (
             <div className="ee-pagination">

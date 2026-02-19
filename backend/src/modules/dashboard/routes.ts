@@ -10,6 +10,7 @@ import { getEventSource, getDefaultEventSource } from '../../services/eventSourc
 import { OpenAiAdapter } from '../llm/adapter.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
 import { metaAnalyzeWindow } from '../pipeline/metaAnalyze.js';
+import { recalcEffectiveScores } from '../events/recalcScores.js';
 
 /**
  * Dashboard-oriented API routes: system overview, drill-down, SSE stream.
@@ -18,18 +19,28 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   const db = getDb();
   const eventSource = getDefaultEventSource(db);
 
-  /** Load the dashboard config from app_config (score_display_window_days). */
-  async function loadDashboardConfig(): Promise<{ score_display_window_days: number }> {
-    const DEFAULTS = { score_display_window_days: 7 };
+  /** Load the dashboard config from app_config. */
+  async function loadDashboardConfig(): Promise<{
+    score_display_window_days: number;
+    reeval_window_days: number;
+    reeval_max_events: number;
+  }> {
+    const DEFAULTS = { score_display_window_days: 7, reeval_window_days: 7, reeval_max_events: 500 };
     try {
       const row = await db('app_config').where({ key: 'dashboard_config' }).first('value');
       if (!row) return DEFAULTS;
       const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
       if (raw && typeof raw === 'object') {
         const days = Number((raw as any).score_display_window_days);
+        const reevalDays = Number((raw as any).reeval_window_days);
+        const reevalMax = Number((raw as any).reeval_max_events);
         return {
           score_display_window_days:
             Number.isFinite(days) && days >= 1 && days <= 90 ? days : DEFAULTS.score_display_window_days,
+          reeval_window_days:
+            Number.isFinite(reevalDays) && reevalDays >= 1 && reevalDays <= 90 ? reevalDays : DEFAULTS.reeval_window_days,
+          reeval_max_events:
+            Number.isFinite(reevalMax) && reevalMax >= 50 && reevalMax <= 10000 ? reevalMax : DEFAULTS.reeval_max_events,
         };
       }
       return DEFAULTS;
@@ -46,7 +57,6 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const systems = await db('monitored_systems').orderBy('name').select('*');
       const dashCfg = await loadDashboardConfig();
       const sinceWindow = new Date(Date.now() - dashCfg.score_display_window_days * 24 * 60 * 60 * 1000).toISOString();
-      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       // ── Bulk queries (reduce N+1 per-system loops) ──────────
 
@@ -91,9 +101,9 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const sourceCountMap = new Map<string, number>();
       for (const r of sourceCounts) sourceCountMap.set(r.system_id, r.cnt);
 
-      // 4. Event counts (last 24h) per system (single query for PG systems)
+      // 4. Event counts (within score display window) per system
       const pgEventCounts = await db('events')
-        .where('timestamp', '>=', since24h)
+        .where('timestamp', '>=', sinceWindow)
         .groupBy('system_id')
         .select('system_id', db.raw('COUNT(id)::int as cnt'));
       const eventCountMap = new Map<string, number>();
@@ -103,7 +113,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       for (const system of systems) {
         if (system.event_source === 'elasticsearch' && !eventCountMap.has(system.id)) {
           const sysEventSource = getEventSource(system, db);
-          const cnt = await sysEventSource.countSystemEvents(system.id, since24h);
+          const cnt = await sysEventSource.countSystemEvents(system.id, sinceWindow);
           eventCountMap.set(system.id, cnt);
         }
       }
@@ -131,7 +141,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           name: system.name,
           description: system.description,
           source_count: sourceCountMap.get(system.id) ?? 0,
-          event_count_24h: eventCountMap.get(system.id) ?? 0,
+          event_count: eventCountMap.get(system.id) ?? 0,
           latest_window: latestWindow
             ? { id: latestWindow.id, from: latestWindow.from_ts, to: latestWindow.to_ts }
             : null,
@@ -426,6 +436,31 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
     },
   );
 
+  // ── Recalculate effective scores for a system ──────────────
+  app.post<{ Params: { systemId: string } }>(
+    '/api/v1/systems/:systemId/recalculate-scores',
+    { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
+    async (request, reply) => {
+      const { systemId } = request.params;
+      const system = await db('monitored_systems').where({ id: systemId }).first();
+      if (!system) return reply.code(404).send({ error: 'System not found.' });
+
+      const updated = await recalcEffectiveScores(db, systemId);
+
+      await writeAuditLog(db, {
+        actor_name: getActorName(request),
+        action: 'recalculate_scores',
+        resource_type: 'system',
+        resource_id: systemId,
+        ip: request.ip,
+        user_id: (request as any).currentUser?.id,
+        session_id: (request as any).currentSession?.id,
+      });
+
+      return reply.send({ ok: true, updated_rows: updated });
+    },
+  );
+
   // ── Re-evaluate meta-analysis for a system ─────────────────
   // Creates a fresh window and runs a full meta-analysis (LLM call).
   // Normal-behavior events are automatically excluded by metaAnalyzeWindow.
@@ -449,23 +484,30 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const llm = new OpenAiAdapter();
       llm.updateConfig({ apiKey: aiCfg.apiKey, model: aiCfg.model, baseUrl: aiCfg.baseUrl });
 
-      // Create a window covering the last 2 hours of events for the LLM to analyze.
-      // The dashboard displays MAX(effective_scores) over the configured display
-      // window (Settings > Dashboard, default 7 days), but the re-evaluate window
-      // covers only the most recent 2 hours of events (a larger window would be
-      // too expensive for the LLM). After analysis, stale scores from older windows
-      // in the display range are zeroed so the dashboard reflects the fresh analysis.
+      // Load dashboard config to get re-eval parameters
+      const dashCfgReeval = await loadDashboardConfig();
+      const reevalWindowDays = dashCfgReeval.reeval_window_days;
+      const reevalMaxEvents = dashCfgReeval.reeval_max_events;
+
+      // Create a window covering reeval_window_days back from now
       const to_ts = new Date().toISOString();
-      const from_ts = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const from_ts = new Date(Date.now() - reevalWindowDays * 24 * 60 * 60 * 1000).toISOString();
 
       const sysEventSource = getEventSource(system, db);
       const eventCount = await sysEventSource.countEventsInTimeRange(systemId, from_ts, to_ts);
       if (eventCount === 0) {
         return reply.code(200).send({
-          message: 'No events in the last 2 hours to analyze.',
+          message: `No events in the last ${reevalWindowDays} day(s) to analyze.`,
           window_id: null,
           event_count: 0,
         });
+      }
+
+      // Recalculate effective scores BEFORE LLM call
+      try {
+        await recalcEffectiveScores(db, systemId);
+      } catch (err: any) {
+        console.log(`[${localTimestamp()}] Pre-reeval recalc failed: ${err.message}`);
       }
 
       const windowId = uuidv4();
@@ -482,7 +524,11 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       );
 
       try {
-        await metaAnalyzeWindow(db, llm, windowId, { excludeAcknowledged: true });
+        await metaAnalyzeWindow(db, llm, windowId, {
+          excludeAcknowledged: true,
+          resetContext: true,
+          maxEvents: reevalMaxEvents,
+        });
       } catch (err) {
         console.error(
           `[${localTimestamp()}] Re-evaluate meta-analysis failed for window ${windowId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -492,28 +538,12 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         });
       }
 
-      // Invalidate stale effective_scores from older windows within the
-      // dashboard's configured display range so the MAX() query returns only
-      // the fresh re-evaluate scores.  Without this, old windows with high
-      // scores (e.g. from before events were marked as normal) keep inflating
-      // the bar.
-      const dashCfgReeval = await loadDashboardConfig();
-      const sinceWindowReeval = new Date(Date.now() - dashCfgReeval.score_display_window_days * 24 * 60 * 60 * 1000).toISOString();
-      await db('effective_scores')
-        .where('system_id', systemId)
-        .whereNot('window_id', windowId)
-        .whereIn('window_id', function () {
-          this.select('id').from('windows')
-            .where('system_id', systemId)
-            .where('to_ts', '>=', sinceWindowReeval)
-            .whereNot('id', windowId);
-        })
-        .update({
-          effective_value: 0,
-          meta_score: 0,
-          max_event_score: 0,
-          updated_at: new Date().toISOString(),
-        });
+      // Recalculate effective scores AFTER LLM call
+      try {
+        await recalcEffectiveScores(db, systemId);
+      } catch (err: any) {
+        console.log(`[${localTimestamp()}] Post-reeval recalc failed: ${err.message}`);
+      }
 
       // Fetch the new effective scores to return to the caller
       const newScores: Record<string, { effective: number; meta: number; max_event: number }> = {};

@@ -337,7 +337,7 @@ export async function fetchAuditLog(params?: {
   return apiFetch(`/api/v1/audit-log?${qs}`);
 }
 
-export async function fetchAuditLogActions(): Promise<{ actions: string[]; resource_types: string[] }> {
+export async function fetchAuditLogActions(): Promise<{ actions: string[]; resource_types: string[]; actors: string[] }> {
   return apiFetch('/api/v1/audit-log/actions');
 }
 
@@ -372,7 +372,7 @@ export interface DashboardSystem {
   name: string;
   description: string;
   source_count: number;
-  event_count_24h: number;
+  event_count: number;
   latest_window: { id: string; from: string; to: string } | null;
   scores: Record<string, SystemScoreInfo>;
   /** Active findings summary — present when the system has open (unhandled) findings. */
@@ -496,6 +496,10 @@ export interface ReEvaluateResponse {
 
 export async function reEvaluateSystem(systemId: string): Promise<ReEvaluateResponse> {
   return apiFetch(`/api/v1/systems/${systemId}/re-evaluate`, { method: 'POST' });
+}
+
+export async function recalculateScores(systemId: string): Promise<{ ok: boolean; updated_rows: number }> {
+  return apiFetch(`/api/v1/systems/${systemId}/recalculate-scores`, { method: 'POST' });
 }
 
 export interface SystemEventsOpts {
@@ -1328,6 +1332,8 @@ export async function updateMetaAnalysisConfig(data: Partial<MetaAnalysisConfig>
 
 export interface DashboardConfig {
   score_display_window_days: number;
+  reeval_window_days: number;
+  reeval_max_events: number;
 }
 
 export interface DashboardConfigResponse {
@@ -1349,12 +1355,14 @@ export async function updateDashboardConfig(data: Partial<DashboardConfig>): Pro
 // ── Pipeline Config ──────────────────────────────────────────
 
 export interface PipelineConfig {
-  pipeline_interval_minutes: number;
+  pipeline_min_interval_minutes: number;
+  pipeline_max_interval_minutes: number;
   window_minutes: number;
   scoring_limit_per_run: number;
   effective_score_meta_weight: number;
   multiline_reassembly: boolean;
   max_future_drift_seconds: number;
+  max_event_message_length: number;
 }
 
 export interface PipelineConfigResponse {

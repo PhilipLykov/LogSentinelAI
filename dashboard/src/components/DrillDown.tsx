@@ -19,6 +19,7 @@ import {
   createNormalBehaviorTemplate,
   fetchNormalBehaviorTemplates,
   reEvaluateSystem,
+  recalculateScores,
   type NormalBehaviorTemplate,
   type NormalBehaviorPreview,
   fetchDashboardConfig,
@@ -88,6 +89,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   // ── Re-evaluate meta-analysis state ─────────────────────
   const [reEvalLoading, setReEvalLoading] = useState(false);
   const [reEvalMsg, setReEvalMsg] = useState('');
+
+  // ── Recalculate scores state (fast, no LLM) ────────────
+  const [recalcLoading, setRecalcLoading] = useState(false);
+  const [recalcMsg, setRecalcMsg] = useState('');
 
   // ── Proof event modal (for events not in the loaded list) ──
   const [proofEvent, setProofEvent] = useState<LogEvent | null>(null);
@@ -785,6 +790,44 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     }
   }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem, loadFindings, isNormalBehavior, showAcknowledged]);
 
+  // ── Recalculate scores handler (fast, no LLM) ──────────
+  const handleRecalculate = useCallback(async () => {
+    if (recalcLoading) return;
+    setRecalcLoading(true);
+    setRecalcMsg('');
+    try {
+      const res = await recalculateScores(system.id);
+      setRecalcMsg(`Recalculated (${res.updated_rows} rows)`);
+      setTimeout(() => setRecalcMsg(''), 5000);
+
+      if (selectedCriterion) {
+        const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
+        if (criterion) {
+          try {
+            const data = await fetchGroupedEventScores(system.id, {
+              criterion_id: criterion.id,
+              limit: 50,
+              min_score: 0.001,
+              show_acknowledged: showAcknowledged,
+            });
+            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+            setExpandedGroup(null);
+            setExpandedGroupEvents([]);
+          } catch { /* ignore */ }
+        }
+      }
+
+      onRefreshSystem?.();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      setRecalcMsg(`Error: ${msg}`);
+      setTimeout(() => setRecalcMsg(''), 6000);
+    } finally {
+      setRecalcLoading(false);
+    }
+  }, [recalcLoading, system.id, selectedCriterion, onRefreshSystem, isNormalBehavior, showAcknowledged]);
+
   // ── Per-group Ack handler ───────────────────────────────
   const handleAckGroup = useCallback(async (groupKey: string) => {
     if (ackingGroupKey) return;
@@ -877,6 +920,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     resolvedFindings;
 
   const findingsPanelRef = useRef<HTMLDivElement>(null);
+
+  const truncateMsg = (msg: string, max = 500) =>
+    msg.length > max ? msg.slice(0, max) + ' \u2026' : msg;
 
   // Severity breakdown for the banner (only count OPEN findings — acked are handled)
   const severityBreakdown = openFindings.reduce<Record<string, number>>((acc, f) => {
@@ -1019,11 +1065,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                     </label>
                     <button
                       className="btn btn-xs btn-primary"
-                      onClick={handleReEvaluate}
-                      disabled={reEvalLoading}
-                      title="Re-run AI meta-analysis on recent events (excludes events marked as normal behavior)"
+                      onClick={handleRecalculate}
+                      disabled={recalcLoading}
+                      title="Recalculate scores from existing data (fast, no LLM call)"
                     >
-                      {reEvalLoading ? 'Analyzing…' : 'Re-evaluate'}
+                      {recalcLoading ? 'Recalculating…' : 'Recalculate'}
                     </button>
                   </>
                 )}
@@ -1035,9 +1081,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                 </button>
               </div>
             </div>
-            {reEvalMsg && (
-              <div className={`reeval-msg${reEvalMsg.startsWith('Error') ? ' reeval-error' : ''}`}>
-                {reEvalMsg}
+            {recalcMsg && (
+              <div className={`reeval-msg${recalcMsg.startsWith('Error') ? ' reeval-error' : ''}`}>
+                {recalcMsg}
               </div>
             )}
 
@@ -1153,7 +1199,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                               onClick={!hasMultiple ? (ev) => { ev.stopPropagation(); openGroupEventDetail(grp); } : undefined}
                               title={!hasMultiple ? 'Click to view full event details' : undefined}
                             >
-                              {grp.message}
+                              {truncateMsg(grp.message)}
                             </td>
                             {hasPermission(currentUser ?? null, 'events:acknowledge') && (
                               <td className="criterion-actions-cell">
@@ -1240,7 +1286,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                                     onClick={() => openEventDetail(ev.event_id)}
                                     title="Click to view full event details"
                                   >
-                                    {ev.message}
+                                    {truncateMsg(ev.message)}
                                   </td>
                                   {hasPermission(currentUser ?? null, 'events:acknowledge') && (
                                     <td className="criterion-actions-cell">
@@ -1327,15 +1373,6 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
             </div>
           )}
         </div>
-      )}
-
-      {/* ── Ask AI (system-scoped) ── */}
-      {hasPermission(currentUser ?? null, 'rag:use') && (
-        <AskAiPanel
-          fixedSystemId={system.id}
-          fixedSystemName={system.name}
-          onAuthError={onAuthError}
-        />
       )}
 
       {/* ── Persistent Findings panel ── */}
@@ -1552,7 +1589,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                               <span className={`severity-badge ${(ev.severity || 'info').toLowerCase()}`}>{ev.severity || 'info'}</span>
                               <span className="proof-event-host">{ev.host || '\u2014'}</span>
                               <span className="proof-event-program">{ev.program || '\u2014'}</span>
-                              <span className="proof-event-message">{ev.message}</span>
+                              <span className="proof-event-message">{truncateMsg(ev.message)}</span>
                             </div>
                           ))}
                         </div>
@@ -1564,6 +1601,18 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Section divider ── */}
+      <hr className="drilldown-section-divider" />
+
+      {/* ── Ask AI (system-scoped) ── */}
+      {hasPermission(currentUser ?? null, 'rag:use') && (
+        <AskAiPanel
+          fixedSystemId={system.id}
+          fixedSystemName={system.name}
+          onAuthError={onAuthError}
+        />
       )}
 
       {/* ── Event filters ─────────────────────────────────── */}

@@ -9,13 +9,15 @@ import { evaluateAlerts } from '../alerting/evaluator.js';
 
 /** Load pipeline config from app_config, falling back to defaults. */
 async function loadPipelineConfig(db: Knex): Promise<{
-  pipeline_interval_minutes: number;
+  pipeline_min_interval_minutes: number;
+  pipeline_max_interval_minutes: number;
   window_minutes: number;
   scoring_limit_per_run: number;
   effective_score_meta_weight: number;
 }> {
   const DEFAULTS = {
-    pipeline_interval_minutes: 5,
+    pipeline_min_interval_minutes: 15,
+    pipeline_max_interval_minutes: 120,
     window_minutes: 5,
     scoring_limit_per_run: 500,
     effective_score_meta_weight: 0.7,
@@ -57,7 +59,7 @@ export async function runPipeline(
   db: Knex,
   llm: LlmAdapter,
   options?: { windowMinutes?: number; wMeta?: number; scoringLimit?: number },
-): Promise<void> {
+): Promise<{ scored: number; windows: number; analyzed: number }> {
   const start = Date.now();
   console.log(`[${localTimestamp()}] Pipeline run started.`);
 
@@ -85,7 +87,6 @@ export async function runPipeline(
         analyzedWindows.push(w);
       } catch (err) {
         console.error(`[${localTimestamp()}] Meta-analyze failed for window ${w.id}:`, err);
-        // Don't evaluate alerts for failed windows (would cause false resolutions)
       }
     }
 
@@ -102,64 +103,96 @@ export async function runPipeline(
     console.log(
       `[${localTimestamp()}] Pipeline run complete in ${elapsed}ms. Scored=${scoringResult.scored}, Windows=${windows.length}, Analyzed=${analyzedWindows.length}`,
     );
+
+    return { scored: scoringResult.scored, windows: windows.length, analyzed: analyzedWindows.length };
   } catch (err) {
     console.error(`[${localTimestamp()}] Pipeline run failed:`, err);
+    return { scored: 0, windows: 0, analyzed: 0 };
   }
 }
 
 /**
- * Start a periodic pipeline runner.
+ * Start an adaptive pipeline scheduler.
+ * After each run the interval adapts based on activity:
+ *   - activity (scored > 0 || analyzed > 0) → reset to min interval
+ *   - idle → double current interval, capped at max
  * Syncs AI config from DB before each run and skips if no API key.
- * Returns a cleanup function to stop the interval.
  */
 export function startPipelineScheduler(
   db: Knex,
   llm: OpenAiAdapter,
-  intervalMs: number = 5 * 60 * 1000, // initial default 5 minutes
 ): { stop: () => void } {
   let running = false;
   let stopped = false;
   let currentTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentIntervalMs = 15 * 60_000; // will be overwritten on first config load
 
   async function tick() {
     if (stopped) return;
     if (running) {
       console.log(`[${localTimestamp()}] Pipeline: previous run still in progress, skipping.`);
-      scheduleNext();
+      void scheduleNext(false);
       return;
     }
     running = true;
     try {
-      // Sync config from DB before each run (picks up UI changes)
       await syncAdapterConfig(db, llm);
 
       if (!llm.isConfigured()) {
-        // No API key from any source — skip silently
+        void scheduleNext(false);
         return;
       }
 
-      await runPipeline(db, llm);
+      const result = await runPipeline(db, llm);
+      const hadActivity = result.scored > 0 || result.analyzed > 0;
+      void scheduleNext(hadActivity);
+    } catch {
+      void scheduleNext(false);
     } finally {
       running = false;
-      scheduleNext();
     }
   }
 
-  async function scheduleNext() {
+  async function scheduleNext(hadActivity: boolean) {
     if (stopped) return;
-    // Read the latest pipeline interval from DB (supports runtime changes via UI)
-    let nextMs = intervalMs;
+
+    let minMs = 15 * 60_000;
+    let maxMs = 120 * 60_000;
     try {
       const cfg = await loadPipelineConfig(db);
-      const cfgMs = cfg.pipeline_interval_minutes * 60 * 1000;
-      if (cfgMs >= 60_000 && cfgMs <= 3_600_000) nextMs = cfgMs;
-    } catch { /* use default */ }
-    currentTimer = setTimeout(tick, nextMs);
+      minMs = cfg.pipeline_min_interval_minutes * 60_000;
+      maxMs = cfg.pipeline_max_interval_minutes * 60_000;
+    } catch { /* use defaults */ }
+
+    const prevMs = currentIntervalMs;
+    if (hadActivity) {
+      currentIntervalMs = minMs;
+    } else {
+      currentIntervalMs = Math.min(currentIntervalMs * 2, maxMs);
+    }
+
+    if (currentIntervalMs !== prevMs) {
+      console.log(
+        `[${localTimestamp()}] Pipeline scheduler: interval ${hadActivity ? 'reset' : 'backed off'} → ${Math.round(currentIntervalMs / 1000)}s`,
+      );
+    }
+
+    currentTimer = setTimeout(tick, currentIntervalMs);
   }
 
-  console.log(`[${localTimestamp()}] Pipeline scheduler started (initial interval=${intervalMs}ms, reads from DB).`);
-  // Start the first tick after the initial interval
-  currentTimer = setTimeout(tick, intervalMs);
+  // Kick-off: load config to set initial interval, then schedule first tick
+  (async () => {
+    try {
+      const cfg = await loadPipelineConfig(db);
+      currentIntervalMs = cfg.pipeline_min_interval_minutes * 60_000;
+    } catch { /* keep default */ }
+
+    console.log(
+      `[${localTimestamp()}] Pipeline scheduler started (adaptive ${Math.round(currentIntervalMs / 1000)}s–` +
+      `reads min/max from DB).`,
+    );
+    currentTimer = setTimeout(tick, currentIntervalMs);
+  })();
 
   return {
     stop: () => {
