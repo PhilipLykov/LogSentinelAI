@@ -18,6 +18,7 @@ type ClientOptions = NonNullable<ConstructorParameters<typeof Client>[0]>;
 import type { Knex } from 'knex';
 import { getDb } from '../db/index.js';
 import { localTimestamp } from '../config/index.js';
+import { logger } from '../config/logger.js';
 import type { ElasticsearchConnection } from '../types/index.js';
 
 // Re-export the type under the alias the routes file uses
