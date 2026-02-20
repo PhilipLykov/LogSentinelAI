@@ -847,6 +847,7 @@ export async function metaAnalyzeWindow(
       if (update.escalateSeverity) {
         updateFields.severity = update.escalateSeverity;
       }
+
       await trx('findings')
         .where({ id: update.id })
         .whereIn('status', ['open', 'acknowledged'])
@@ -1258,6 +1259,58 @@ export async function metaAnalyzeWindow(
       cost_estimate: usage.model ? estimateCost(usage.token_input, usage.token_output, usage.model) : null,
     });
   });
+
+  // ── Backfill key_event_ids for this system's findings that have none ──
+  // Retroactively populate key_event_ids by parsing [N] refs from finding text.
+  // This fixes findings created before the [N] parsing was deployed.
+  try {
+    const orphanFindings = await db('findings')
+      .where({ system_id: system.id })
+      .whereIn('status', ['open', 'acknowledged'])
+      .whereNull('key_event_ids')
+      .select('id', 'text');
+
+    if (orphanFindings.length > 0 && eventIndexToId.size > 0) {
+      for (const f of orphanFindings) {
+        const refIds: string[] = [];
+        const rp = /\[(\d+)\]/g;
+        let rm: RegExpExecArray | null;
+        while ((rm = rp.exec(f.text)) !== null) {
+          const resolved = eventIndexToId.get(parseInt(rm[1], 10));
+          if (resolved && !refIds.includes(resolved)) refIds.push(resolved);
+        }
+
+        // Fallback: word overlap if no [N] refs
+        if (refIds.length === 0) {
+          const fWords = significantWords(f.text);
+          if (fWords.size > 0) {
+            for (const [eid, msg] of eventIndexToMessage) {
+              const evWords = significantWords(msg);
+              let overlap = 0;
+              for (const w of fWords) {
+                if (evWords.has(w)) overlap++;
+              }
+              if (overlap / fWords.size >= 0.3) {
+                const resolved = eventIndexToId.get(eid);
+                if (resolved && !refIds.includes(resolved)) refIds.push(resolved);
+              }
+            }
+          }
+        }
+
+        if (refIds.length > 0) {
+          await db('findings')
+            .where({ id: f.id })
+            .update({ key_event_ids: JSON.stringify(refIds.slice(0, 20)) });
+        }
+      }
+      logger.debug(
+        `[${localTimestamp()}] Backfilled key_event_ids for ${orphanFindings.length} findings (system=${system.id})`,
+      );
+    }
+  } catch (err: any) {
+    logger.warn(`[${localTimestamp()}] key_event_ids backfill failed: ${err.message}`);
+  }
 
   // Count accepted resolutions (those with event evidence)
   const acceptedResolutions = result.resolvedFindings.filter((r) => {
