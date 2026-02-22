@@ -414,7 +414,14 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
       ) : activeTab === 'normal-behavior' ? (
         <NormalBehaviorPanel onAuthError={onAuthError} />
       ) : activeTab === 'discovery' ? (
-        <DiscoveryPanel onAuthError={onAuthError} />
+        <DiscoveryPanel
+          onAuthError={onAuthError}
+          onNavigateToSystem={async (systemId) => {
+            await loadSystems();
+            setSelectedSystemId(systemId);
+            setActiveTab('systems');
+          }}
+        />
       ) : activeTab === 'users' ? (
         <UserManagementSection onAuthError={onAuthError} currentUser={currentUser} />
       ) : activeTab === 'roles' ? (

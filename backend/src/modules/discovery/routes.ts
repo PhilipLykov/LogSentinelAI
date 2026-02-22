@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { Knex } from 'knex';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -8,6 +9,7 @@ import { logger } from '../../config/logger.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { DISCOVERY_DEFAULTS, type DiscoveryConfig } from './groupingEngine.js';
 import { computeNormalizedHash } from '../ingest/normalize.js';
+import { resolveAiConfig } from '../llm/aiConfig.js';
 
 export async function registerDiscoveryRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
@@ -266,6 +268,19 @@ export async function registerDiscoveryRoutes(app: FastifyInstance): Promise<voi
           session_id: (request as any).currentSession?.id,
         });
 
+        // Fire-and-forget: ask LLM to generate a meaningful description
+        const sampleMessages: string[] = typeof suggestion.sample_messages === 'string'
+          ? JSON.parse(suggestion.sample_messages)
+          : suggestion.sample_messages ?? [];
+        setImmediate(() => {
+          generateSystemDescription(db, systemId, {
+            host: suggestion.host_pattern || undefined,
+            ip: suggestion.ip_pattern || undefined,
+            programs,
+            sampleMessages,
+          }).catch(() => {});
+        });
+
         return reply.send({ system_id: systemId, name: systemName });
       } catch (err: any) {
         logger.error(`[${localTimestamp()}] Discovery accept failed: ${err.message}`);
@@ -396,4 +411,72 @@ export async function registerDiscoveryRoutes(app: FastifyInstance): Promise<voi
 /** Escape special regex characters in a string for use in a regex pattern. */
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Ask the LLM to generate a short system description based on discovered context.
+ * Fire-and-forget — failures are logged but never block the accept flow.
+ */
+async function generateSystemDescription(
+  db: Knex,
+  systemId: string,
+  context: { host?: string; ip?: string; programs: string[]; sampleMessages: string[] },
+): Promise<void> {
+  try {
+    const aiCfg = await resolveAiConfig(db);
+    if (!aiCfg.apiKey) return;
+
+    const parts: string[] = [];
+    if (context.host) parts.push(`Hostname: ${context.host}`);
+    if (context.ip) parts.push(`IP address: ${context.ip}`);
+    if (context.programs.length > 0) parts.push(`Programs/services running: ${context.programs.join(', ')}`);
+    if (context.sampleMessages.length > 0) {
+      parts.push('Sample log messages:');
+      for (const msg of context.sampleMessages.slice(0, 5)) {
+        parts.push(`  - ${msg.slice(0, 300)}`);
+      }
+    }
+
+    if (parts.length === 0) return;
+
+    const userContent = parts.join('\n');
+    const systemPrompt =
+      'You are an IT infrastructure analyst. Given the following information about a server or network device ' +
+      'that was auto-discovered via syslog, write a concise 1-2 sentence description of what this system likely is ' +
+      'and its role in the infrastructure. Be specific but brief. Return ONLY the description text, no JSON, no quotes, no extra formatting.';
+
+    const res = await fetch(`${aiCfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${aiCfg.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: aiCfg.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+        temperature: 0.3,
+        max_tokens: 150,
+      }),
+    });
+
+    if (!res.ok) {
+      logger.warn(`[${localTimestamp()}] Discovery LLM description failed: HTTP ${res.status}`);
+      return;
+    }
+
+    const data = await res.json() as any;
+    const description = (data.choices?.[0]?.message?.content ?? '').trim();
+    if (!description || description.length < 5) return;
+
+    await db('monitored_systems')
+      .where({ id: systemId })
+      .update({ description, updated_at: new Date().toISOString() });
+
+    logger.info(`[${localTimestamp()}] Discovery: LLM generated description for system ${systemId}`);
+  } catch (err: any) {
+    logger.warn(`[${localTimestamp()}] Discovery: LLM description generation failed: ${err.message}`);
+  }
 }

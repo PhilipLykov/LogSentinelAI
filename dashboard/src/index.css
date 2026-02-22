@@ -4377,6 +4377,11 @@ tr.event-row-acked:hover {
   color: #6b7280;
 }
 
+.badge-success {
+  background: rgba(39, 174, 96, 0.15);
+  color: #27ae60;
+}
+
 .db-status-completed_with_errors {
   background: rgba(234, 179, 8, 0.15);
   color: #b45309;
@@ -6154,4 +6159,207 @@ tr.event-row-acked:hover {
 
 .discovery-banner strong {
   color: var(--info, #3498db);
+}
+
+/* ── Discovery panel ─────────────────────────────────── */
+
+.discovery-panel {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem 0;
+}
+
+.discovery-config-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+
+.discovery-config-section h3 {
+  margin: 0 0 16px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.discovery-config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+}
+
+.discovery-config-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.discovery-config-col .form-group {
+  margin-bottom: 10px;
+}
+
+.discovery-config-full {
+  grid-column: 1 / -1;
+}
+
+.discovery-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 0.875rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.discovery-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.discovery-toggle-label {
+  font-weight: 600;
+}
+
+.discovery-auto-accept-warn {
+  color: var(--danger, #e74c3c);
+  font-size: 0.78rem;
+  margin-left: 4px;
+}
+
+.discovery-ignore-textarea {
+  width: 100%;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.82rem;
+}
+
+/* Suggestions section */
+
+.discovery-suggestions-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+
+.discovery-suggestions-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.discovery-suggestions-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.discovery-status-filters {
+  display: flex;
+  gap: 4px;
+}
+
+.discovery-suggestions-header > .btn:last-child {
+  margin-left: auto;
+}
+
+.discovery-empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.discovery-table {
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+.discovery-name-input {
+  width: 180px;
+  font-size: 0.83rem;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
+.discovery-name-input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
+}
+
+.discovery-ip {
+  opacity: 0.8;
+}
+
+.discovery-programs-cell {
+  max-width: 220px;
+}
+
+.discovery-programs-info {
+  font-size: 0.82rem;
+}
+
+.discovery-programs-hint {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 2px;
+}
+
+.discovery-date-cell {
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.discovery-samples-btn {
+  margin-left: 6px;
+  font-size: 0.72rem !important;
+  padding: 1px 6px !important;
+}
+
+.discovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.discovery-merge-select,
+.discovery-dismiss-select {
+  font-size: 0.78rem;
+  padding: 4px 6px;
+  max-width: 140px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
+.discovery-samples-panel {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+}
+
+.discovery-sample-msg {
+  margin: 4px 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 0.78rem;
 }
