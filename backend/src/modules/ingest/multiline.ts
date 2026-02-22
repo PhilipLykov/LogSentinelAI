@@ -6,7 +6,7 @@
  * a separate syslog message.  This module detects and merges related lines
  * into single events.
  *
- * Two independent detection methods are used:
+ * Four independent detection methods are used:
  *
  * **Method 1 — `[N-M]` continuation headers** (syslog_sequence_numbers = on):
  *   [5-1] first part of the message
@@ -18,12 +18,21 @@
  *   2026-02-17 01:14:58.777 EET [127949] user@db DETAIL: ...
  *   2026-02-17 01:14:58.777 EET [127949] user@db STATEMENT: ...
  *
- * Both methods use **group-based** merging (not strict adjacency), so
+ * **Method 3 — Generic fragment detection** (same host + program + second):
+ *   Merges lines that look like continuations (key:value, stack traces,
+ *   braces) into the nearest head line within the same batch.
+ *
+ * **Method 4 — Cross-batch fragment buffer** (handles split flushes):
+ *   Orphan fragments with no head in the current batch are held in an
+ *   in-memory buffer.  When a matching head arrives in a subsequent batch,
+ *   the fragments are merged.  Expired fragments are released as standalone
+ *   events (no data loss).
+ *
+ * Methods 1–3 use **group-based** merging (not strict adjacency), so
  * interleaved entries from concurrent sessions or other programs do not
  * break reassembly.
  *
- * The module operates entirely within a single ingest batch (no cross-batch
- * state) and runs BEFORE normalisation.
+ * The module runs BEFORE normalisation.
  */
 
 import { localTimestamp } from '../../config/index.js';
@@ -487,16 +496,146 @@ function reassembleGenericFragments(
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Method 4: Cross-batch fragment buffer
+// ═══════════════════════════════════════════════════════════════════
+//
+//  When log shippers (Fluent Bit, rsyslog) flush at a 1-second interval,
+//  a single multi-line error dump can span two flushes. The head line
+//  arrives in batch N and is ingested normally. The property/continuation
+//  lines arrive in batch N+1 with no head to merge into.
+//
+//  This in-memory buffer holds orphan fragments briefly so they can be
+//  merged with a matching head in a subsequent batch.
+//
+//  Performance characteristics (enterprise-safe):
+//    - O(1) Map lookup per host+program pair
+//    - Bounded memory: max BUFFER_MAX_KEYS groups, max BUFFER_MAX_PER_KEY
+//      fragments per group ≈ 5 MB worst case
+//    - Lazy purge on each batch (no background timer / extra goroutine)
+//    - Fully synchronous (no async overhead)
+//    - Node.js single-threaded: no locking required
+// ═══════════════════════════════════════════════════════════════════
+
+const BUFFER_TTL_MS = 10_000;               // hold fragments max 10 seconds
+const BUFFER_MAX_KEYS = 500;                 // max distinct host+program groups
+const BUFFER_MAX_PER_KEY = 30;               // max fragments per group
+const BUFFER_TIMESTAMP_WINDOW_MS = 5_000;    // ±5 s for head–fragment matching
+
+interface OrphanFragment {
+  entry: RawEntry;
+  message: string;
+  timestampMs: number;
+  bufferedAt: number;
+}
+
+const _fragmentBuffer = new Map<string, OrphanFragment[]>();
+
+function hostProgKey(e: RawEntry): string {
+  return `${e.host ?? ''}\0${e.program ?? ''}`;
+}
+
+function parseTimestampMs(e: RawEntry): number | null {
+  const raw = (e as any).timestamp ?? (e as any)['@timestamp'];
+  if (!raw) return null;
+  if (typeof raw === 'number') return raw > 1e12 ? raw : raw * 1000;
+  if (typeof raw !== 'string') return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+
+function purgeExpiredFragments(now: number): RawEntry[] {
+  const expired: RawEntry[] = [];
+  for (const [key, frags] of _fragmentBuffer) {
+    const keep: OrphanFragment[] = [];
+    for (const f of frags) {
+      if (now - f.bufferedAt > BUFFER_TTL_MS) {
+        expired.push(f.entry);
+      } else {
+        keep.push(f);
+      }
+    }
+    if (keep.length === 0) {
+      _fragmentBuffer.delete(key);
+    } else if (keep.length !== frags.length) {
+      _fragmentBuffer.set(key, keep);
+    }
+  }
+  return expired;
+}
+
+function tryMergeFromBuffer(head: RawEntry): RawEntry | null {
+  const ts = parseTimestampMs(head);
+  if (ts === null) return null;
+
+  const key = hostProgKey(head);
+  const frags = _fragmentBuffer.get(key);
+  if (!frags || frags.length === 0) return null;
+
+  const matching: number[] = [];
+  for (let i = 0; i < frags.length; i++) {
+    if (Math.abs(frags[i].timestampMs - ts) <= BUFFER_TIMESTAMP_WINDOW_MS) {
+      matching.push(i);
+    }
+  }
+  if (matching.length === 0) return null;
+
+  matching.sort((a, b) => frags[a].timestampMs - frags[b].timestampMs);
+
+  const mergedMsg = head.message! + '\n' +
+    matching.map(i => frags[i].message).join('\n');
+
+  for (let i = matching.length - 1; i >= 0; i--) {
+    frags.splice(matching[i], 1);
+  }
+  if (frags.length === 0) _fragmentBuffer.delete(key);
+
+  return { ...head, message: mergedMsg };
+}
+
+function bufferOrphanFragment(entry: RawEntry, now: number): boolean {
+  const ts = parseTimestampMs(entry);
+  if (ts === null) return false;
+
+  const key = hostProgKey(entry);
+
+  let frags = _fragmentBuffer.get(key);
+  if (!frags) {
+    if (_fragmentBuffer.size >= BUFFER_MAX_KEYS) {
+      const oldestKey = _fragmentBuffer.keys().next().value;
+      if (oldestKey !== undefined) _fragmentBuffer.delete(oldestKey);
+    }
+    frags = [];
+    _fragmentBuffer.set(key, frags);
+  }
+
+  if (frags.length >= BUFFER_MAX_PER_KEY) return false;
+
+  frags.push({
+    entry: { ...entry },
+    message: entry.message!,
+    timestampMs: ts,
+    bufferedAt: now,
+  });
+  return true;
+}
+
+/** Exposed for testing. */
+export function _resetFragmentBuffer(): void {
+  _fragmentBuffer.clear();
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Public API
 // ═══════════════════════════════════════════════════════════════════
 
 /**
  * Reassemble multiline syslog entries in a batch.
  *
- * Applies three independent detection methods:
+ * Applies four independent detection methods:
  *   1. `[N-M]` continuation headers (group-based, handles interleaving)
  *   2. PID + timestamp grouping for standard PostgreSQL log prefix
  *   3. Generic fragment detection (same host + program + second)
+ *   4. Cross-batch fragment buffer (holds orphans for next batch)
  *
  * Entries that do not match any multiline pattern pass through unchanged.
  *
@@ -504,61 +643,100 @@ function reassembleGenericFragments(
  * @returns A new array with merged entries (length <= entries.length).
  */
 export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
-  if (!entries || entries.length <= 1) return entries;
+  const now = Date.now();
+
+  // Flush expired buffer fragments → they re-enter the pipeline as standalone
+  const expiredFragments = purgeExpiredFragments(now);
+
+  if ((!entries || entries.length === 0) && expiredFragments.length === 0) {
+    return entries ?? [];
+  }
+
+  const safeEntries = entries ?? [];
 
   // result[i] = null means "not yet placed, will use original entry"
   // result[i] = undefined means "consumed by a merge, skip"
   // result[i] = object means "placed (merged or orphan-stripped)"
-  const result: (unknown | null | undefined)[] = new Array(entries.length).fill(null);
+  const result: (unknown | null | undefined)[] = new Array(safeEntries.length).fill(null);
 
-  // Method 1: [N-M] continuation headers
-  const nmConsumed = reassembleNM(entries, result);
+  if (safeEntries.length > 1) {
+    // Method 1: [N-M] continuation headers
+    const nmConsumed = reassembleNM(safeEntries, result);
 
-  // Method 2: PID + timestamp grouping (on remaining entries)
-  reassemblePgLogPrefix(entries, result, nmConsumed);
+    // Method 2: PID + timestamp grouping (on remaining entries)
+    reassemblePgLogPrefix(safeEntries, result, nmConsumed);
 
-  // Method 3: Generic fragment detection (on remaining entries)
-  const allConsumed = new Set(nmConsumed);
-  for (let i = 0; i < result.length; i++) {
-    if (result[i] !== null && result[i] !== undefined) allConsumed.add(i);
-    if (result[i] === undefined) allConsumed.add(i);
+    // Method 3: Generic fragment detection (on remaining entries)
+    const allConsumed = new Set(nmConsumed);
+    for (let i = 0; i < result.length; i++) {
+      if (result[i] !== null && result[i] !== undefined) allConsumed.add(i);
+      if (result[i] === undefined) allConsumed.add(i);
+    }
+    reassembleGenericFragments(safeEntries, result, allConsumed);
   }
-  const mergedByGeneric = reassembleGenericFragments(entries, result, allConsumed);
 
-  // Final assembly: collect results in original order
+  // Method 4: Cross-batch buffer — merge buffered fragments into heads,
+  // buffer new orphan fragments, and release expired ones.
   const output: unknown[] = [];
-  let mergedByNM = 0;
-  let mergedByPid = 0;
+  let mergedFromBuffer = 0;
+  let newlyBuffered = 0;
 
-  for (let i = 0; i < entries.length; i++) {
-    if (result[i] === undefined) {
-      // Consumed by a merge — skip
+  // 4a. Release expired fragments as standalone events
+  for (const ef of expiredFragments) {
+    output.push(ef);
+  }
+
+  // 4b. Process current batch entries
+  for (let i = 0; i < safeEntries.length; i++) {
+    if (result[i] === undefined) continue;
+
+    const entry = result[i] ?? safeEntries[i];
+    if (!isValidEntry(entry)) {
+      output.push(entry);
       continue;
     }
-    if (result[i] !== null) {
-      // Placed by Method 1, 2, or 3
-      output.push(result[i]);
-      if (nmConsumed.has(i)) mergedByNM++;
-      else mergedByPid++;
+
+    const re = entry as RawEntry;
+    const msg = re.message!;
+    const wasProcessedByMethod = result[i] !== null;
+
+    if (wasProcessedByMethod || !isFragment(msg)) {
+      // Head or already-merged entry — check buffer for matching fragments
+      const merged = tryMergeFromBuffer(re);
+      if (merged) {
+        output.push(merged);
+        mergedFromBuffer++;
+      } else {
+        output.push(entry);
+      }
     } else {
-      // Not matched by any method — pass through unchanged
-      output.push(entries[i]);
+      // Unprocessed fragment — buffer it instead of ingesting
+      if (bufferOrphanFragment(re, now)) {
+        newlyBuffered++;
+      } else {
+        // Buffer full — pass through as standalone
+        output.push(entry);
+      }
     }
   }
 
-  const totalMerged = mergedByNM + mergedByPid + mergedByGeneric;
-  if (totalMerged > 0) {
-    const delta = entries.length - output.length;
-    if (delta > 0) {
-      const parts: string[] = [];
-      if (nmConsumed.size > 0) parts.push(`[N-M]=${nmConsumed.size}`);
-      if (mergedByPid > 0) parts.push(`PID-group=${mergedByPid}`);
-      if (mergedByGeneric > 0) parts.push(`generic=${mergedByGeneric}`);
-      logger.debug(
-        `[${localTimestamp()}] Multiline reassembly: ${entries.length} → ${output.length} entries ` +
-        `(merged ${delta}: ${parts.join(', ')})`,
-      );
-    }
+  // Logging
+  const totalChanges = expiredFragments.length + mergedFromBuffer + newlyBuffered;
+  if (totalChanges > 0) {
+    const parts: string[] = [];
+    if (mergedFromBuffer > 0) parts.push(`cross-batch-merged=${mergedFromBuffer}`);
+    if (newlyBuffered > 0) parts.push(`buffered=${newlyBuffered}`);
+    if (expiredFragments.length > 0) parts.push(`expired-released=${expiredFragments.length}`);
+    logger.debug(
+      `[${localTimestamp()}] Multiline cross-batch: ${parts.join(', ')} (buffer size=${_fragmentBuffer.size} keys)`,
+    );
+  }
+
+  if (safeEntries.length > output.length) {
+    logger.debug(
+      `[${localTimestamp()}] Multiline reassembly: ${safeEntries.length} → ${output.length} entries ` +
+      `(reduced ${safeEntries.length - output.length})`,
+    );
   }
 
   return output;
