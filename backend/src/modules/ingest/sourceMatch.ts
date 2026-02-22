@@ -62,9 +62,19 @@ async function loadSources(db: Knex): Promise<LogSource[]> {
   return _loadPromise;
 }
 
+export interface SourceMatch {
+  system_id: string;
+  log_source_id: string;
+  isCatchAll: boolean;
+}
+
 /**
  * Match a normalized event to a log source by evaluating selectors
- * in priority order. Returns { system_id, log_source_id } or null.
+ * in priority order. Returns { system_id, log_source_id, isCatchAll } or null.
+ *
+ * `isCatchAll` is true when every pattern in the matched selector is a
+ * universal wildcard (e.g., `.*`). This lets the ingest route buffer
+ * catch-all-only matches for auto-discovery while still ingesting them.
  *
  * Selector matching: each key in the selector must match the corresponding
  * field on the event (case-insensitive substring or exact). An empty selector
@@ -73,16 +83,32 @@ async function loadSources(db: Knex): Promise<LogSource[]> {
 export async function matchSource(
   db: Knex,
   event: NormalizedEvent,
-): Promise<{ system_id: string; log_source_id: string } | null> {
+): Promise<SourceMatch | null> {
   const sources = await loadSources(db);
 
   for (const source of sources) {
     if (matchesSelector(event, source.selector)) {
-      return { system_id: source.system_id, log_source_id: source.id };
+      return {
+        system_id: source.system_id,
+        log_source_id: source.id,
+        isCatchAll: isCatchAllSelector(source.selector),
+      };
     }
   }
 
   return null;
+}
+
+const WILDCARD_PATTERNS = new Set(['.*', '^.*$', '.+', '^.+$']);
+
+function isCatchAllSelector(selector: LogSourceSelector | LogSourceSelector[]): boolean {
+  const groups = Array.isArray(selector) ? selector : [selector];
+  return groups.every(group => {
+    if (!group || typeof group !== 'object') return true;
+    const entries = Object.entries(group).filter(([, v]) => v !== undefined && v !== '');
+    if (entries.length === 0) return true;
+    return entries.every(([, pattern]) => WILDCARD_PATTERNS.has(String(pattern)));
+  });
 }
 
 function matchesSelector(event: NormalizedEvent, selector: LogSourceSelector | LogSourceSelector[]): boolean {

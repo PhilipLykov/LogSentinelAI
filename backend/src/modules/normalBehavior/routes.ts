@@ -67,8 +67,9 @@ async function retroactivelyApplyTemplate(
     return { zeroedEvents: 0, updatedWindows: 0 };
   }
 
-  // 2. Recalculate effective_scores in a single CTE query
-  const updatedWindows = await recalcEffectiveScores(db, systemId);
+  // 2. Recalculate effective_scores — skip normal_ids CTE because step 1
+  //    already zeroed the matching scores, making the regex scan redundant.
+  const updatedWindows = await recalcEffectiveScores(db, systemId, { skipNormalBehavior: true });
 
   logger.debug(
     `[${localTimestamp()}] Retroactive normal-behavior update: zeroed ${zeroedEvents} event_scores, recalculated ${updatedWindows} windows (lookback=${windowDays}d)`,
@@ -266,23 +267,24 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
         `[${localTimestamp()}] Normal behavior template created by ${username}: regex (system=${systemId ?? 'global'}, host=${hostPattern ?? 'any'}, program=${programPattern ?? 'any'})`,
       );
 
-      // Retroactively zero scores for matching events and recalculate effective scores.
-      let retroResult = { zeroedEvents: 0, updatedWindows: 0 };
-      try {
-        retroResult = await retroactivelyApplyTemplate(db, patternRegex, systemId, hostPattern, programPattern);
-      } catch (err) {
-        logger.error(
-          `[${localTimestamp()}] Retroactive score update failed (template ${id} still created): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+      // Return immediately — user sees instant feedback
+      reply.code(201).send(created);
 
-      return reply.code(201).send({
-        ...created,
-        retroactive: {
-          zeroed_events: retroResult.zeroedEvents,
-          updated_windows: retroResult.updatedWindows,
-        },
+      // Retroactively zero scores and recalculate in the background (non-blocking)
+      setImmediate(async () => {
+        try {
+          const result = await retroactivelyApplyTemplate(db, patternRegex, systemId, hostPattern, programPattern);
+          logger.debug(
+            `[${localTimestamp()}] Retroactive normal-behavior apply complete (template ${id}): zeroed=${result.zeroedEvents}, windows=${result.updatedWindows}`,
+          );
+        } catch (err) {
+          logger.error(
+            `[${localTimestamp()}] Retroactive score update failed (template ${id} still created): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       });
+
+      return reply;
     },
   );
 

@@ -233,6 +233,20 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           continue;
         }
 
+        // Buffer catch-all matches for discovery so the grouping engine can
+        // suggest more specific systems even when a catch-all source exists.
+        if (match.isCatchAll && discoveryEnabled) {
+          discoveryRows.push({
+            host: normalized.host || null,
+            source_ip: normalized.source_ip || null,
+            program: normalized.program || null,
+            facility: normalized.facility || null,
+            severity: normalized.severity || null,
+            message_sample: (normalized.message || '').slice(0, 512),
+            received_at: normalized.timestamp || new Date().toISOString(),
+          });
+        }
+
         // 2b. Apply per-system timezone correction (corrects RFC 3164 TZ mismatch)
         const tzName = tzNameMap.get(match.system_id);
         if (tzName) {

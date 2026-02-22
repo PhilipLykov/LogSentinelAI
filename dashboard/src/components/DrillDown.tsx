@@ -595,7 +595,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         host: markOkModal.host,
         program: markOkModal.program,
       });
-      setMarkOkSuccess('Template created. Scores recalculated. Future matching events will be treated as normal behavior.');
+      setMarkOkSuccess('Template created. Scores will update shortly. Future matching events will be treated as normal behavior.');
       setTimeout(() => {
         setMarkOkModal(null);
         setMarkOkSuccess('');
