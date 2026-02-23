@@ -9,6 +9,7 @@ import { logger } from '../../config/logger.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { DISCOVERY_DEFAULTS, type DiscoveryConfig } from './groupingEngine.js';
 import { computeNormalizedHash } from '../ingest/normalize.js';
+import { invalidateSourceCache } from '../ingest/sourceMatch.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
 
 export async function registerDiscoveryRoutes(app: FastifyInstance): Promise<void> {
@@ -208,6 +209,8 @@ export async function registerDiscoveryRoutes(app: FastifyInstance): Promise<voi
             .update({ status: 'accepted', updated_at: now });
         });
 
+        invalidateSourceCache();
+
         // Optionally replay buffered events (outside transaction — non-critical)
         if (body?.replay_events) {
           try {
@@ -336,6 +339,8 @@ export async function registerDiscoveryRoutes(app: FastifyInstance): Promise<voi
             .where({ id })
             .update({ status: 'merged', merge_target_id: system_id, updated_at: now });
         });
+
+        invalidateSourceCache();
 
         await writeAuditLog(db, {
           actor_name: getActorName(request),
