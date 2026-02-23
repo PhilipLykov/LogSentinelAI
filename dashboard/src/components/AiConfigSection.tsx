@@ -1514,15 +1514,15 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
               <fieldset className="tok-opt-group">
                 <legend>Scoring &amp; Weights</legend>
                 <div className="tok-opt-row">
-                  <label>Scoring limit per run</label>
+                  <label>Scoring chunk size</label>
                   <NumericInput
-                    min={10} max={5000} step={10}
-                    value={pipeCfg.scoring_limit_per_run}
-                    onChange={(v) => setPipeCfg({ ...pipeCfg, scoring_limit_per_run: v })}
+                    min={500} max={100000} step={1000}
+                    value={pipeCfg.scoring_chunk_size ?? pipeCfg.scoring_limit_per_run ?? 5000}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, scoring_chunk_size: v })}
                     style={{ width: 90 }}
                   />
                   <span className="form-hint">
-                    Maximum number of events scored per pipeline run. Default: 500.
+                    Events fetched per iteration (memory chunk). All unscored events are processed in a loop (10-min time guard). LLM cost is driven by unique templates, not this value. Default: 5000.
                   </span>
                 </div>
                 <div className="tok-opt-row">

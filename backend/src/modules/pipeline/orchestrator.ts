@@ -15,7 +15,7 @@ async function loadPipelineConfig(db: Knex): Promise<{
   pipeline_min_interval_minutes: number;
   pipeline_max_interval_minutes: number;
   window_minutes: number;
-  scoring_limit_per_run: number;
+  scoring_chunk_size: number;
   effective_score_meta_weight: number;
   normalize_sql_statements: boolean;
 }> {
@@ -23,7 +23,7 @@ async function loadPipelineConfig(db: Knex): Promise<{
     pipeline_min_interval_minutes: 15,
     pipeline_max_interval_minutes: 120,
     window_minutes: 5,
-    scoring_limit_per_run: 500,
+    scoring_chunk_size: 5000,
     effective_score_meta_weight: 0.7,
     normalize_sql_statements: false,
   };
@@ -32,7 +32,12 @@ async function loadPipelineConfig(db: Knex): Promise<{
     if (!row) return DEFAULTS;
     const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
     if (raw && typeof raw === 'object') {
-      return { ...DEFAULTS, ...(raw as Partial<typeof DEFAULTS>) };
+      const merged = { ...DEFAULTS, ...(raw as Record<string, unknown>) };
+      // Backward compat: migrate old scoring_limit_per_run → scoring_chunk_size
+      if ((raw as any).scoring_limit_per_run && !(raw as any).scoring_chunk_size) {
+        merged.scoring_chunk_size = Math.max(1000, Number((raw as any).scoring_limit_per_run) || DEFAULTS.scoring_chunk_size);
+      }
+      return merged as typeof DEFAULTS;
     }
     return DEFAULTS;
   } catch {
@@ -63,7 +68,7 @@ async function syncAdapterConfig(db: Knex, llm: OpenAiAdapter): Promise<void> {
 export async function runPipeline(
   db: Knex,
   llm: LlmAdapter,
-  options?: { windowMinutes?: number; wMeta?: number; scoringLimit?: number },
+  options?: { windowMinutes?: number; wMeta?: number; chunkSize?: number },
 ): Promise<{ scored: number; windows: number; analyzed: number }> {
   const start = Date.now();
   logger.debug(`[${localTimestamp()}] Pipeline run started.`);
@@ -72,9 +77,9 @@ export async function runPipeline(
     // Load pipeline config from DB (runtime-configurable via UI)
     const pipeCfg = await loadPipelineConfig(db);
 
-    // 1. Per-event scoring
+    // 1. Per-event scoring — processes ALL unscored events in a loop
     const scoringResult = await runPerEventScoringJob(db, llm, {
-      limit: options?.scoringLimit ?? pipeCfg.scoring_limit_per_run,
+      chunkSize: options?.chunkSize ?? pipeCfg.scoring_chunk_size,
       normalizeSql: pipeCfg.normalize_sql_statements,
     });
 

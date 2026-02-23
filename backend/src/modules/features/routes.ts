@@ -1093,10 +1093,10 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     pipeline_min_interval_minutes: 15,
     pipeline_max_interval_minutes: 120,
     window_minutes: 5,
-    scoring_limit_per_run: 500,
+    scoring_chunk_size: 5000,
     effective_score_meta_weight: 0.7,
     multiline_reassembly: true,
-    max_future_drift_seconds: 300,  // 5 minutes — events further in the future are clamped to now
+    max_future_drift_seconds: 300,
     max_event_message_length: 8192,
     normalize_sql_statements: false,
   };
@@ -1147,11 +1147,16 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           return reply.code(400).send({ error: 'window_minutes must be 1–60.' });
         }
       }
-      if (body.scoring_limit_per_run !== undefined) {
-        const v = Number(body.scoring_limit_per_run);
-        if (!Number.isFinite(v) || v < 10 || v > 5000) {
-          return reply.code(400).send({ error: 'scoring_limit_per_run must be 10–5000.' });
+      if (body.scoring_chunk_size !== undefined) {
+        const v = Number(body.scoring_chunk_size);
+        if (!Number.isFinite(v) || v < 500 || v > 100000) {
+          return reply.code(400).send({ error: 'scoring_chunk_size must be 500–100000.' });
         }
+      }
+      // Backward compat: accept old key and map to new
+      if (body.scoring_limit_per_run !== undefined && body.scoring_chunk_size === undefined) {
+        body.scoring_chunk_size = Math.max(1000, Number(body.scoring_limit_per_run) || 5000);
+        delete body.scoring_limit_per_run;
       }
       if (body.effective_score_meta_weight !== undefined) {
         const v = Number(body.effective_score_meta_weight);

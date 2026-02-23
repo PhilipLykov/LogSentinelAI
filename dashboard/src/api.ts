@@ -1369,7 +1369,9 @@ export interface PipelineConfig {
   pipeline_min_interval_minutes: number;
   pipeline_max_interval_minutes: number;
   window_minutes: number;
-  scoring_limit_per_run: number;
+  scoring_chunk_size: number;
+  /** @deprecated Use scoring_chunk_size. Kept for backward compat reading. */
+  scoring_limit_per_run?: number;
   effective_score_meta_weight: number;
   multiline_reassembly: boolean;
   max_future_drift_seconds: number;

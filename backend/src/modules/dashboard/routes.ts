@@ -597,7 +597,6 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           try {
             const scoringResult = await runPerEventScoringJob(db, llm, {
               systemId,
-              limit: reevalMaxEvents,
               normalizeSql,
             });
             if (scoringResult.scored > 0) {
