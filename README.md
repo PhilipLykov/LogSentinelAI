@@ -6,6 +6,35 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 
 ---
 
+## Screenshots
+
+### Dashboard
+Real-time overview of all monitored systems with 6-criteria AI score bars, active issue badges, and last analysis timestamps.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Event Explorer
+Full-text search across all systems with filtering by severity, host, source IP, program, and time range. Smart search mode for natural language queries.
+
+![Event Explorer](docs/screenshots/event-explorer.png)
+
+### AI Usage & Cost Tracking
+Per-request LLM usage log with token counts, estimated costs, and system-level breakdown. Supports all OpenAI-compatible models.
+
+![AI Usage](docs/screenshots/ai-usage.png)
+
+### Audit Log
+Immutable record of all administrative actions with actor tracking, IP logging, and CSV/JSON export for compliance.
+
+![Audit Log](docs/screenshots/audit-log.png)
+
+### Privacy & Data Protection
+Configurable PII masking with 11 built-in categories, custom regex patterns, field stripping, and a live test filter.
+
+![Privacy Settings](docs/screenshots/privacy-settings.png)
+
+---
+
 ## Why LogSentinel AI?
 
 ### AI-Powered Analysis
