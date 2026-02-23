@@ -10,7 +10,7 @@ import { getEventSource, getDefaultEventSource } from '../../services/eventSourc
 import { OpenAiAdapter } from '../llm/adapter.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
 import { metaAnalyzeWindow } from '../pipeline/metaAnalyze.js';
-import { recalcEffectiveScores } from '../events/recalcScores.js';
+import { recalcEffectiveScores, DEFAULT_W_META } from '../events/recalcScores.js';
 import { runPerEventScoringJob } from '../pipeline/scoringJob.js';
 
 /** In-memory tracker for background re-evaluate jobs. */
@@ -88,18 +88,22 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const windowMap = new Map<string, any>();
       for (const w of latestWindows.rows ?? []) windowMap.set(w.system_id, w);
 
-      // 2. Effective scores: MAX across display window, grouped by system + criterion
-      const allScoreRows = await db('effective_scores')
-        .join('windows', 'effective_scores.window_id', 'windows.id')
-        .where('windows.to_ts', '>=', sinceWindow)
-        .groupBy('effective_scores.system_id', 'effective_scores.criterion_id')
-        .select(
-          'effective_scores.system_id',
-          'effective_scores.criterion_id',
-          db.raw('MAX(effective_scores.effective_value) as effective_value'),
-          db.raw('MAX(effective_scores.meta_score) as meta_score'),
-          db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
-        );
+      // 2. Effective scores: pick the row with the highest effective_value per
+      //    (system, criterion) so meta_score and max_event_score come from
+      //    the same window, avoiding contradictory component values.
+      const allScoreResult = await db.raw(`
+        SELECT DISTINCT ON (eff.system_id, eff.criterion_id)
+          eff.system_id,
+          eff.criterion_id,
+          eff.effective_value,
+          eff.meta_score,
+          eff.max_event_score
+        FROM effective_scores eff
+        JOIN windows w ON eff.window_id = w.id
+        WHERE w.to_ts >= ?
+        ORDER BY eff.system_id, eff.criterion_id, eff.effective_value DESC
+      `, [sinceWindow]);
+      const allScoreRows = allScoreResult.rows ?? [];
       const scoreMap = new Map<string, Record<string, { effective: number; meta: number; max_event: number }>>();
       for (const row of allScoreRows) {
         const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
@@ -617,6 +621,24 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             resetContext: true,
             maxEvents: reevalMaxEvents,
           });
+
+          // Zero out stale meta_scores on prior windows so MAX aggregation
+          // doesn't pick up scores from superseded analyses.
+          try {
+            await db('effective_scores')
+              .whereIn('window_id', function () {
+                this.select('id').from('windows')
+                  .where('system_id', systemId)
+                  .whereNot('id', windowId);
+              })
+              .where('system_id', systemId)
+              .update({
+                meta_score: 0,
+                effective_value: db.raw(`? * max_event_score`, [1 - DEFAULT_W_META]),
+              });
+          } catch (err: any) {
+            app.log.warn(`[${localTimestamp()}] Zeroing old meta_scores failed: ${err.message}`);
+          }
 
           try { await recalcEffectiveScores(db, systemId); } catch (err: any) {
             app.log.warn(`[${localTimestamp()}] Recalc after re-evaluate failed: ${err.message}`);

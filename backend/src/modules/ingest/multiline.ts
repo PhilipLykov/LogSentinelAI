@@ -142,10 +142,15 @@ function reassembleNM(entries: unknown[], result: (unknown | null)[]): Set<numbe
     // Find the head (continuation === 1)
     const headIdx = group.findIndex((g) => g.continuation === 1);
     if (headIdx < 0) {
-      // No head found — emit all as orphans (stripped)
-      for (const item of group) {
-        result[item.idx] = { ...item.entry, message: decodeSyslogOctalEscapes(item.body) };
-        consumed.add(item.idx);
+      // No head found — consolidate all orphans into ONE merged event
+      // (group is already sorted by continuation on line 140)
+      const parts = group.map(item => decodeSyslogOctalEscapes(item.body));
+      const first = group[0];
+      result[first.idx] = { ...first.entry, message: parts.join('\n') };
+      consumed.add(first.idx);
+      for (let k = 1; k < group.length; k++) {
+        result[group[k].idx] = undefined;
+        consumed.add(group[k].idx);
       }
       continue;
     }

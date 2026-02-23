@@ -4,21 +4,45 @@ import { CRITERIA } from '../../types/index.js';
 /** Default meta-weight for effective score blending (must match metaAnalyze). */
 export const DEFAULT_W_META = 0.7;
 
+// ── Global mutex: prevents concurrent CTE+UPDATE deadlocks ──────────────
+// All callers (pipeline, ack/unack, re-evaluate, recalculate, mark-OK)
+// are serialized through this single promise chain.
+let _recalcMutex: Promise<void> = Promise.resolve();
+
 /**
  * Recalculate effective_scores for recent windows belonging to a system.
  * Called after ack/unack to ensure the score bars reflect the change immediately.
  *
- * Uses a single SQL CTE+UPDATE instead of a nested loop over windows x criteria.
- *
- * Supports both PG-backed systems (events in `events` table) and ES-backed
- * systems (events tracked via `es_event_metadata`).  The LATERAL subquery
- * uses a UNION to find max scores from both sources.
- *
- * Normal-behavior filtering is done in a pre-computed CTE (`normal_ids`) so
- * the expensive regex scan happens once across the events table, not once per
- * (event x window x criterion) combination inside the LATERAL.
+ * Internally serialized via a global promise mutex to prevent PostgreSQL
+ * deadlocks when concurrent callers update the same effective_scores rows.
  */
 export async function recalcEffectiveScores(
+  db: ReturnType<typeof getDb>,
+  systemId: string | null,
+  options?: { skipNormalBehavior?: boolean },
+): Promise<number> {
+  const wait = _recalcMutex;
+  let unlock!: () => void;
+  _recalcMutex = new Promise<void>(r => { unlock = r; });
+  await wait;
+  try {
+    return await _recalcImpl(db, systemId, options);
+  } finally {
+    unlock();
+  }
+}
+
+/**
+ * Inner implementation (called under mutex).
+ *
+ * Uses a single SQL CTE+UPDATE instead of a nested loop over windows x criteria.
+ * Supports both PG-backed and ES-backed systems. Normal-behavior filtering is
+ * done in a pre-computed CTE so the expensive regex scan runs once.
+ *
+ * After the main CTE, a supplementary UPDATE ensures the latest window reflects
+ * events that arrived after the window's to_ts (e.g., between pipeline runs).
+ */
+async function _recalcImpl(
   db: ReturnType<typeof getDb>,
   systemId: string | null,
   options?: { skipNormalBehavior?: boolean },
@@ -124,7 +148,42 @@ export async function recalcEffectiveScores(
       AND eff.criterion_id = wm.criterion_id
   `, params);
 
-  const updatedCount = result.rowCount ?? 0;
+  let updatedCount = result.rowCount ?? 0;
+
+  // ── Supplementary: ensure the latest window reflects events arriving after
+  //    the window's to_ts (between pipeline runs). Only for per-system calls.
+  if (systemId) {
+    const latestWin = await db('windows')
+      .where({ system_id: systemId })
+      .where('to_ts', '>=', since)
+      .orderBy('to_ts', 'desc')
+      .first('id');
+
+    if (latestWin) {
+      const suppl = await db.raw(`
+        WITH live_max AS (
+          SELECT es.criterion_id, MAX(es.score) AS max_score
+          FROM event_scores es
+          JOIN events e ON e.id::text = es.event_id
+          WHERE e.system_id = ?
+            AND e.timestamp >= ?
+            AND e.acknowledged_at IS NULL
+            AND es.score_type = 'event'
+          GROUP BY es.criterion_id
+        )
+        UPDATE effective_scores eff
+        SET max_event_score = lm.max_score,
+            effective_value = ? * eff.meta_score + ? * lm.max_score,
+            updated_at = NOW()
+        FROM live_max lm
+        WHERE eff.window_id = ?
+          AND eff.system_id = ?
+          AND eff.criterion_id = lm.criterion_id
+          AND lm.max_score > eff.max_event_score
+      `, [systemId, since, DEFAULT_W_META, 1 - DEFAULT_W_META, latestWin.id, systemId]);
+      updatedCount += (suppl.rowCount ?? 0);
+    }
+  }
 
   // If no effective_scores rows were updated AND a systemId was provided,
   // try to INSERT seed rows from live event_scores so the dashboard

@@ -67,6 +67,24 @@ export async function loadTokenOptConfig(db: Knex): Promise<TokenOptimizationCon
 
 // ── Helpers ─────────────────────────────────────────────────
 
+// ── Orphan fragment detection ────────────────────────────────
+// Short messages that look like SQL keywords, tab-prefixed continuations,
+// or "Process NNN" lines are likely fragments from multiline reassembly
+// that slipped through. Scoring them wastes LLM tokens and produces noise.
+
+const SQL_FRAGMENT_RE = /^(SELECT|FROM|JOIN|LEFT\s+JOIN|INNER\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|WHERE|AND|OR|ON|ORDER\s+BY|GROUP\s+BY|HAVING|UNION|INSERT|UPDATE|DELETE|SET|VALUES|INTO|LIMIT|OFFSET|AS|CASE|WHEN|THEN|ELSE|END|WITH|RETURNING|LATERAL|COALESCE|EXISTS|NOT|IN|IS|NULL|LIKE|BETWEEN|DISTINCT|ALL|ANY|CREATE|ALTER|DROP|INDEX|TABLE|CONSTRAINT|PRIMARY|FOREIGN|REFERENCES|CASCADE|BEGIN|COMMIT|ROLLBACK|EXPLAIN|ANALYZE)\b/i;
+const PROCESS_FRAGMENT_RE = /^Process\s+\d+/;
+
+function isOrphanFragment(message: string | undefined | null): boolean {
+  if (!message || message.length > 120) return false;
+  const trimmed = message.trim();
+  if (trimmed.length < 5) return true;
+  if (/^#011/.test(trimmed) || /^\t/.test(trimmed)) return true;
+  if (SQL_FRAGMENT_RE.test(trimmed)) return true;
+  if (PROCESS_FRAGMENT_RE.test(trimmed)) return true;
+  return false;
+}
+
 /** Build an empty (zero) ScoreResult. */
 function emptyScoreResult(defaultVal = 0): ScoreResult {
   return {
@@ -178,6 +196,29 @@ export async function runPerEventScoringJob(
 
   if (unscoredEvents.length === 0) {
     logger.debug(`[${localTimestamp()}] Per-event scoring: all events matched normal behavior templates.`);
+    return { scored: 0, templates: 0, errors: 0 };
+  }
+
+  // ── 1c. Filter orphan fragments that slip through multiline reassembly ──
+  // Short SQL-like fragments, tab-prefixed continuations, or "Process NNN"
+  // lines are not meaningful as standalone events — skip LLM scoring.
+  const fragmentExcluded: any[] = [];
+  unscoredEvents = unscoredEvents.filter((evt: any) => {
+    if (isOrphanFragment(evt.message)) {
+      fragmentExcluded.push(evt);
+      return false;
+    }
+    return true;
+  });
+  if (fragmentExcluded.length > 0) {
+    logger.debug(
+      `[${localTimestamp()}] Per-event scoring: ${fragmentExcluded.length} orphan fragments skipped`,
+    );
+    await markEventsScored(db, fragmentExcluded.map((e: any) => ({ id: e.id, system_id: e.system_id })), esSystemIds);
+  }
+
+  if (unscoredEvents.length === 0) {
+    logger.debug(`[${localTimestamp()}] Per-event scoring: all remaining events were orphan fragments.`);
     return { scored: 0, templates: 0, errors: 0 };
   }
 

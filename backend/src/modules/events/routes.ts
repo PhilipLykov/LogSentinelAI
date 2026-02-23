@@ -9,40 +9,6 @@ import { getDefaultEventSource, getEventSource } from '../../services/eventSourc
 import { recalcEffectiveScores } from './recalcScores.js';
 
 /**
- * Per-system coalescing guard for background recalcEffectiveScores.
- * When an ack/unack triggers a recalc while one is already running for the
- * same system, the request is deferred: once the running recalc finishes, a
- * fresh one is scheduled so the second ack's committed changes are picked up.
- */
-const _recalcInProgress = new Set<string>();
-const _recalcPending = new Map<string, () => Promise<void>>();
-
-/**
- * Execute `work` with coalescing: if the same `guardKey` is already running,
- * the latest request is queued and fires once the running one finishes.
- */
-async function runCoalescedRecalc(
-  guardKey: string,
-  work: () => Promise<void>,
-): Promise<void> {
-  if (_recalcInProgress.has(guardKey)) {
-    _recalcPending.set(guardKey, work);
-    return;
-  }
-  _recalcInProgress.add(guardKey);
-  try {
-    await work();
-  } finally {
-    _recalcInProgress.delete(guardKey);
-    const pending = _recalcPending.get(guardKey);
-    if (pending) {
-      _recalcPending.delete(guardKey);
-      setImmediate(() => runCoalescedRecalc(guardKey, pending));
-    }
-  }
-}
-
-/**
  * Transition open findings to 'acknowledged' status when their text
  * significantly overlaps with acknowledged event messages.
  */
@@ -304,8 +270,8 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           message: `${totalAcked} event${totalAcked !== 1 ? 's' : ''} acknowledged.`,
         });
 
-        // Run expensive operations in the background (coalesced per system)
-        setImmediate(() => runCoalescedRecalc(sysId || '__all__', async () => {
+        // Run expensive operations in the background (serialized via internal mutex)
+        setImmediate(async () => {
           try {
             await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
           } catch (err: any) {
@@ -348,7 +314,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           } catch (err: any) {
             app.log.error(`[${localTimestamp()}] Finding transition after ack failed: ${err.message}`);
           }
-        }));
+        });
 
         return reply;
       } catch (err: any) {
@@ -409,13 +375,13 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           message: `${result} event${result !== 1 ? 's' : ''} un-acknowledged.`,
         });
 
-        setImmediate(() => runCoalescedRecalc(sysId || '__all__', async () => {
+        setImmediate(async () => {
           try {
             await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
           } catch (err: any) {
             app.log.error(`[${localTimestamp()}] Effective score recalc after unack failed: ${err.message}`);
           }
-        }));
+        });
 
         return reply;
       } catch (err: any) {
@@ -559,8 +525,8 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           message: `${ackResult} event${ackResult !== 1 ? 's' : ''} in group acknowledged.`,
         });
 
-        // Run expensive operations in the background (coalesced per system)
-        setImmediate(() => runCoalescedRecalc(system_id, async () => {
+        // Run expensive operations in the background (serialized via internal mutex)
+        setImmediate(async () => {
           try {
             const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
             app.log.debug(`[${localTimestamp()}] Group ack background: ${updatedWindows} windows recalculated (system=${system_id})`);
@@ -573,7 +539,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           } catch (err: any) {
             app.log.error(`[${localTimestamp()}] Finding transition after group ack failed: ${err.message}`);
           }
-        }));
+        });
 
         return reply;
       } catch (err: any) {
@@ -703,15 +669,15 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           message: `${unackCount} event${unackCount !== 1 ? 's' : ''} in group un-acknowledged.`,
         });
 
-        // Run recalc in the background (coalesced per system)
-        setImmediate(() => runCoalescedRecalc(system_id, async () => {
+        // Run recalc in the background (serialized via internal mutex)
+        setImmediate(async () => {
           try {
             const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
             app.log.debug(`[${localTimestamp()}] Group unack background: ${updatedWindows} windows recalculated (system=${system_id})`);
           } catch (err: any) {
             app.log.error(`[${localTimestamp()}] Effective score recalc after group unack failed: ${err.message}`);
           }
-        }));
+        });
 
         return reply;
       } catch (err: any) {

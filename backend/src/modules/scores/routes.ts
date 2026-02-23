@@ -39,19 +39,22 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
 
         if (!latestWindow) continue;
 
-        // Rolling max across all windows in the time range
-        const scores = await db('effective_scores')
-          .join('windows', 'effective_scores.window_id', 'windows.id')
-          .where('effective_scores.system_id', system.id)
-          .where('windows.to_ts', '>=', since)
-          .where('windows.to_ts', '<=', until)
-          .groupBy('effective_scores.criterion_id')
-          .select(
-            'effective_scores.criterion_id',
-            db.raw('MAX(effective_scores.effective_value) as effective_value'),
-            db.raw('MAX(effective_scores.meta_score) as meta_score'),
-            db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
-          );
+        // Pick the row with the highest effective_value per criterion so
+        // meta_score and max_event_score come from the same window.
+        const scoresResult = await db.raw(`
+          SELECT DISTINCT ON (eff.criterion_id)
+            eff.criterion_id,
+            eff.effective_value,
+            eff.meta_score,
+            eff.max_event_score
+          FROM effective_scores eff
+          JOIN windows w ON eff.window_id = w.id
+          WHERE eff.system_id = ?
+            AND w.to_ts >= ?
+            AND w.to_ts <= ?
+          ORDER BY eff.criterion_id, eff.effective_value DESC
+        `, [system.id, since, until]);
+        const scores = scoresResult.rows ?? [];
 
         const scoreMap: Record<string, { effective: number; meta: number; max_event: number }> = {};
         for (const s of scores) {
