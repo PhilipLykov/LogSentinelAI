@@ -571,7 +571,7 @@ async function batchUpdateTemplateCache(
 
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK);
-    const placeholders = chunk.map(() => '(?, ?, ?::jsonb, ?::int, ?::numeric)').join(', ');
+    const placeholders = chunk.map(() => '(?::uuid, ?::timestamptz, ?::jsonb, ?::int, ?::numeric)').join(', ');
     const values = chunk.flatMap((r) => r);
     await db.raw(`
       UPDATE message_templates AS mt
@@ -581,7 +581,7 @@ async function batchUpdateTemplateCache(
           avg_max_score  = v.avg_max_score
       FROM (VALUES ${placeholders})
         AS v(id, last_scored_at, cached_scores, score_count, avg_max_score)
-      WHERE mt.id = v.id::uuid
+      WHERE mt.id = v.id
     `, values);
   }
 }
