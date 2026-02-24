@@ -66,7 +66,7 @@ export async function resolveAiConfig(db: Knex): Promise<AiConfig> {
   _cache = {
     apiKey: dbValues['openai_api_key'] ?? process.env.OPENAI_API_KEY ?? '',
     model: dbValues['openai_model'] ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
-    baseUrl: dbValues['openai_base_url'] ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+    baseUrl: (dbValues['openai_base_url'] ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, ''),
   };
   _cacheTs = now;
 

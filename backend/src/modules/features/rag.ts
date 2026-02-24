@@ -50,7 +50,7 @@ export async function askQuestion(
   const aiCfg = await resolveAiConfig(db);
   const apiKey = aiCfg.apiKey;
   const model = aiCfg.model;
-  const baseUrl = aiCfg.baseUrl;
+  const baseUrl = aiCfg.baseUrl.replace(/\/+$/, '');
 
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured. Set it in Settings → AI Model or via environment variable.');
 
@@ -273,6 +273,8 @@ export async function askQuestion(
   const userContent = `<context>\n${context}\n</context>\n\n<question>\n${sanitized}\n</question>`;
 
   let res: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120_000);
   try {
     res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -289,10 +291,17 @@ export async function askQuestion(
         temperature: 0.3,
         max_tokens: 1000,
       }),
+      signal: controller.signal,
     });
   } catch (netErr: any) {
+    if (netErr.name === 'AbortError') {
+      logger.error(`[${localTimestamp()}] RAG LLM request timed out after 120s`);
+      throw new Error('AI service did not respond in time. Please try again.');
+    }
     logger.error(`[${localTimestamp()}] RAG LLM network error: ${netErr.message}`);
     throw new Error('Failed to reach the AI service. Please check network and base URL configuration.');
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!res.ok) {

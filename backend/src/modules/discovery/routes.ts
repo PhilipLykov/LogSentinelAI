@@ -450,22 +450,34 @@ async function generateSystemDescription(
       'that was auto-discovered via syslog, write a concise 1-2 sentence description of what this system likely is ' +
       'and its role in the infrastructure. Be specific but brief. Return ONLY the description text, no JSON, no quotes, no extra formatting.';
 
-    const res = await fetch(`${aiCfg.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${aiCfg.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: aiCfg.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-        temperature: 0.3,
-        max_tokens: 150,
-      }),
-    });
+    const normalizedUrl = aiCfg.baseUrl.replace(/\/+$/, '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await fetch(`${normalizedUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${aiCfg.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: aiCfg.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+          temperature: 0.3,
+          max_tokens: 150,
+        }),
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      logger.warn(`[${localTimestamp()}] Discovery LLM description failed: ${err.name === 'AbortError' ? 'timeout' : err.message}`);
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       logger.warn(`[${localTimestamp()}] Discovery LLM description failed: HTTP ${res.status}`);

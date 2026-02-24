@@ -422,7 +422,7 @@ export class OpenAiAdapter implements LlmAdapter {
   constructor(cfg?: { apiKey?: string; model?: string; baseUrl?: string }) {
     this.apiKey = cfg?.apiKey ?? process.env.OPENAI_API_KEY ?? '';
     this.model = cfg?.model ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
-    this.baseUrl = cfg?.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1';
+    this.baseUrl = (cfg?.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
 
     if (!this.apiKey) {
       logger.warn(`[${localTimestamp()}] WARNING: OPENAI_API_KEY not set. LLM scoring will fail.`);
@@ -433,7 +433,7 @@ export class OpenAiAdapter implements LlmAdapter {
   updateConfig(cfg: { apiKey?: string; model?: string; baseUrl?: string }): void {
     if (cfg.apiKey !== undefined) this.apiKey = cfg.apiKey;
     if (cfg.model !== undefined) this.model = cfg.model;
-    if (cfg.baseUrl !== undefined) this.baseUrl = cfg.baseUrl;
+    if (cfg.baseUrl !== undefined) this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
   }
 
   /** Check whether the adapter has a valid API key configured. */
