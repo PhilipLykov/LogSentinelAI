@@ -59,7 +59,7 @@ async function _recalcImpl(
 
   const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
 
-  const skip = options?.skipNormalBehavior ?? false;
+  const skip = options?.skipNormalBehavior ?? true;
   const systemFilter = systemId ? 'AND eff.system_id = ?' : '';
   const normalSystemFilter = systemId ? 'AND e.system_id = ?' : '';
   const params: unknown[] = [];

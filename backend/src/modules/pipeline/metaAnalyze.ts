@@ -271,8 +271,10 @@ export async function metaAnalyzeWindow(
       );
       if (maxScore > 0) { allZero = false; break; }
     }
-    // Also check events without scores (they might not have been scored yet)
-    if (allZero && scoreMap.size > 0) {
+    // When scoreMap is empty, allZero stays true (loop doesn't execute).
+    // This correctly handles events scored to 0 (no event_scores rows due
+    // to zero-score optimization in writeBulkEventScores).
+    if (allZero && events.length > 0) {
       logger.debug(
         `[${localTimestamp()}] Meta-analyze: all ${events.length} events scored 0 in window ${windowId}, ` +
         `skipping LLM call (O1 optimization)`,
@@ -304,7 +306,10 @@ export async function metaAnalyzeWindow(
 
       // Still process finding lifecycle (check dormancy for open findings)
       // but skip the LLM call and finding creation
-      const context = await buildMetaContext(db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE);
+      const context = await buildMetaContext(
+        db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+        { excludeAcknowledged: effectiveExcludeAcked },
+      );
       if (context.openFindings.length > 0) {
         // Increment consecutive_misses for all open findings (none were seen)
         await db('findings')
@@ -450,7 +455,10 @@ export async function metaAnalyzeWindow(
   }
 
   // ── Build historical context (sliding window) ───────────
-  const context = await buildMetaContext(db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE);
+  const context = await buildMetaContext(
+    db, system.id, windowId, contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+    { excludeAcknowledged: effectiveExcludeAcked },
+  );
 
   // ── Normal-behavior awareness for LLM context ─────────
   // 1. Auto-resolve open findings whose text matches a normal-behavior template.
@@ -1187,12 +1195,10 @@ export async function metaAnalyzeWindow(
     // Single query to get MAX(score) per criterion for un-acknowledged events,
     // then batch-insert all 6 effective_scores rows in one statement.
     //
-    // The NOT EXISTS checks exclude:
-    //   1. PG events with acknowledged_at set
-    //   2. ES events with acknowledged_at set (via es_event_metadata)
-    //   3. Events matching any enabled normal behavior template (defense-in-depth;
-    //      eventIds is already pre-filtered, but scores may linger in event_scores
-    //      for templates created after scoring)
+    // The NOT EXISTS checks exclude acknowledged events.
+    // Normal behavior filtering is already applied to eventIds (lines 191-200)
+    // and the scoring pipeline excludes normal behavior from event_scores,
+    // so no regex re-check is needed here.
     const maxScoreRows = await trx.raw(`
       SELECT es.criterion_id, COALESCE(MAX(es.score), 0) AS max_score
       FROM event_scores es
@@ -1208,15 +1214,6 @@ export async function metaAnalyzeWindow(
           WHERE em.es_event_id = es.event_id
             AND em.system_id = ?
             AND em.acknowledged_at IS NOT NULL
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM events e2
-          JOIN normal_behavior_templates nbt ON nbt.enabled = true
-            AND (nbt.system_id IS NULL OR nbt.system_id = e2.system_id)
-            AND e2.message ~* nbt.pattern
-            AND (nbt.host_pattern IS NULL OR e2.host ~* nbt.host_pattern)
-            AND (nbt.program_pattern IS NULL OR e2.program ~* nbt.program_pattern)
-          WHERE e2.id::text = es.event_id
         )
       GROUP BY es.criterion_id
     `, [eventIds.map(String), system.id]);
@@ -1322,6 +1319,7 @@ async function buildMetaContext(
   systemId: string,
   currentWindowId: string,
   contextWindowSize: number = DEFAULT_CONTEXT_WINDOW_SIZE,
+  options?: { excludeAcknowledged?: boolean },
 ): Promise<ExtendedMetaContext> {
   // 1. Previous window summaries (last N, excluding the current window)
   const prevMetas = await db('meta_results')
@@ -1337,14 +1335,15 @@ async function buildMetaContext(
     summary: m.summary,
   }));
 
-  // 2. Currently open AND acknowledged findings for this system.
-  // Including acknowledged findings prevents the LLM from creating duplicate
-  // findings for issues that an operator has already seen.
+  // 2. Open (and optionally acknowledged) findings for this system.
+  // During re-evaluate, acknowledged findings are excluded so the LLM
+  // produces a clean assessment without referencing already-handled issues.
+  const findingStatuses = options?.excludeAcknowledged ? ['open'] : ['open', 'acknowledged'];
   const openRows = await db('findings')
     .where({ system_id: systemId })
-    .whereIn('status', ['open', 'acknowledged'])
+    .whereIn('status', findingStatuses)
     .orderBy('created_at', 'desc')
-    .limit(30) // Cap to avoid huge prompts
+    .limit(30)
     .select('id', 'text', 'severity', 'criterion_slug', 'fingerprint',
             'occurrence_count', 'consecutive_misses', 'status',
             'created_at', 'last_seen_at', 'reopen_count', 'is_flapping');

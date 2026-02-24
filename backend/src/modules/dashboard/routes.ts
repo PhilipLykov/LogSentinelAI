@@ -594,18 +594,22 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       // Fire background work
       setImmediate(async () => {
         try {
+          const t0 = Date.now();
+
           try {
             const scoringResult = await runPerEventScoringJob(db, llm, {
               systemId,
               normalizeSql,
             });
-            if (scoringResult.scored > 0) {
-              app.log.info(`[${localTimestamp()}] Re-evaluate: scored ${scoringResult.scored} events for system ${systemId}`);
-            }
+            app.log.info(
+              `[${localTimestamp()}] Re-evaluate [${systemName}]: scoring done in ${Date.now() - t0}ms ` +
+              `(scored=${scoringResult.scored}, templates=${scoringResult.templates})`,
+            );
           } catch (err: any) {
             app.log.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
           }
 
+          const t1 = Date.now();
           const windowId = uuidv4();
           await db('windows').insert({
             id: windowId,
@@ -620,9 +624,9 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             resetContext: true,
             maxEvents: reevalMaxEvents,
           });
+          app.log.info(`[${localTimestamp()}] Re-evaluate [${systemName}]: meta-analysis done in ${Date.now() - t1}ms`);
 
-          // Zero out stale meta_scores on prior windows so MAX aggregation
-          // doesn't pick up scores from superseded analyses.
+          const t2 = Date.now();
           try {
             await db('effective_scores')
               .whereIn('window_id', function () {
@@ -642,6 +646,10 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           try { await recalcEffectiveScores(db, systemId); } catch (err: any) {
             app.log.warn(`[${localTimestamp()}] Recalc after re-evaluate failed: ${err.message}`);
           }
+          app.log.info(
+            `[${localTimestamp()}] Re-evaluate [${systemName}]: recalc done in ${Date.now() - t2}ms ` +
+            `(total=${Date.now() - t0}ms)`,
+          );
 
           const newScores: Record<string, { effective: number; meta: number; max_event: number }> = {};
           const effRows = await db('effective_scores').where({ window_id: windowId, system_id: systemId });
