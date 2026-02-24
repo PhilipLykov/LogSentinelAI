@@ -1648,7 +1648,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                 </div>
 
                 <p className="mark-ok-hint">
-                  Patterns use regex syntax: <code>\d+</code> = digits, <code>.*</code> = anything,
+                  Patterns use regex syntax: <code>[0-9]+</code> = digits, <code>.*</code> = anything,
                   <code>^...$</code> = exact match. Leave host/program empty to match all.
                 </p>
               </div>

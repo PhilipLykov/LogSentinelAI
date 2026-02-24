@@ -11,8 +11,11 @@ import { logger } from '../../config/logger.js';
  * reducing noise and saving tokens.
  *
  * Patterns are stored as full regex strings (anchored with ^ … $) so
- * users can express precise match conditions (e.g., `\d{1,3}` for a
+ * users can express precise match conditions (e.g., `[0-9]{1,3}` for a
  * number vs `.*` for "anything").
+ *
+ * Generated patterns use POSIX character classes ([0-9] instead of \d)
+ * for compatibility with both JavaScript regex and PostgreSQL's ~* operator.
  */
 
 // ── Types ────────────────────────────────────────────────────
@@ -94,7 +97,7 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
   // IPv4 addresses with optional CIDR
   {
     detect: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\/\d{1,2})?\b/g,
-    replacement: '\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?:\\/\\d{1,2})?',
+    replacement: '[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}(?:\\/[0-9]{1,2})?',
     tag: 'IPv4',
   },
   // IPv6 addresses (simplified)
@@ -106,25 +109,25 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
   // Network interface names (Cisco/HP/Juniper long form)
   {
     detect: /\b(?:(?:Ten)?(?:Hundred)?(?:Gigabit)?(?:Fast)?Ethernet|Gi|Fa|Te|Hu|Eth|eth|ens|em|enp\d+s)\d+(?:\/\d+)*/gi,
-    replacement: '(?:(?:Ten)?(?:Hundred)?(?:Gigabit)?(?:Fast)?Ethernet|Gi|Fa|Te|Hu|Eth|eth|ens|em|enp\\d+s)\\S+',
+    replacement: '(?:(?:Ten)?(?:Hundred)?(?:Gigabit)?(?:Fast)?Ethernet|Gi|Fa|Te|Hu|Eth|eth|ens|em|enp[0-9]+s)[^ ]+',
     tag: 'IFACE',
   },
   // Network interface names (Port-channel, Vlan, Loopback, etc.)
   {
     detect: /\b(?:Port-channel|Po|po|Vlan|vlan|Loopback|Lo|Tunnel|Tu|BVI|bvi|mgmt|Mgmt)\d+\b/gi,
-    replacement: '(?:Port-channel|Po|po|Vlan|vlan|Loopback|Lo|Tunnel|Tu|BVI|bvi|mgmt|Mgmt)\\d+',
+    replacement: '(?:Port-channel|Po|po|Vlan|vlan|Loopback|Lo|Tunnel|Tu|BVI|bvi|mgmt|Mgmt)[0-9]+',
     tag: 'IFACE2',
   },
   // "Switch N", "Stack N", "Unit N", "Slot N", "Module N"
   {
     detect: /\b(?:Switch|Stack|Unit|Slot|Module|Member|Node)\s+\d+\b/gi,
-    replacement: '(?:Switch|Stack|Unit|Slot|Module|Member|Node)\\s+\\d+',
+    replacement: '(?:Switch|Stack|Unit|Slot|Module|Member|Node)[ \\t]+[0-9]+',
     tag: 'DEVICE_ID',
   },
   // MST/STP instance identifiers
   {
     detect: /\b(?:MST|MSTI|STP)\d+\b/gi,
-    replacement: '(?:MST|MSTI|STP)\\d+',
+    replacement: '(?:MST|MSTI|STP)[0-9]+',
     tag: 'STP_ID',
   },
   // Hex strings (0x-prefixed 4+ chars)
@@ -162,13 +165,13 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
   // underscore is a word character (no boundary between _ and 0).
   {
     detect: /_\d+\b/g,
-    replacement: '_\\d+',
+    replacement: '_[0-9]+',
     tag: 'UNDERSCORE_NUM',
   },
   // Standalone numbers (not inside words) — must be last
   {
     detect: /\b\d+\b/g,
-    replacement: '\\d+',
+    replacement: '[0-9]+',
     tag: 'NUM',
   },
 ];
