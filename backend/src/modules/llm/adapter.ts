@@ -610,7 +610,14 @@ export class OpenAiAdapter implements LlmAdapter {
 
     const userContent = sections.join('\n');
     const prompt = options?.systemPrompt ?? DEFAULT_META_SYSTEM_PROMPT;
-    const response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
+
+    let response: { content: string; usage: LlmUsageInfo };
+    try {
+      response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
+    } catch (err) {
+      logger.error(`[${localTimestamp()}] LLM meta-analysis network/API error:`, err);
+      throw new Error(`Meta-analysis LLM call failed: ${(err as Error).message}`);
+    }
 
     try {
       const jsonContent = extractJson(response.content);
@@ -701,6 +708,9 @@ export class OpenAiAdapter implements LlmAdapter {
     }
   }
 
+  private static readonly REQUEST_TIMEOUT_MS = 120_000;
+  private static readonly RETRYABLE_CODES = new Set([429, 502, 503, 504]);
+
   private async chatCompletion(
     systemPrompt: string,
     userContent: string,
@@ -717,33 +727,73 @@ export class OpenAiAdapter implements LlmAdapter {
       response_format: { type: 'json_object' as const },
     };
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      throw new Error(`OpenAI API error ${res.status}: ${errorText}`);
-    }
-
-    const data = await res.json() as any;
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) {
-      logger.warn(`[${localTimestamp()}] LLM returned empty content (model=${effectiveModel})`);
-    }
-    const usage: LlmUsageInfo = {
-      model: effectiveModel,
-      token_input: data.usage?.prompt_tokens ?? 0,
-      token_output: data.usage?.completion_tokens ?? 0,
-      request_count: 1,
+    const url = `${this.baseUrl}/chat/completions`;
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${this.apiKey}`,
     };
+    const bodyStr = JSON.stringify(body);
 
-    return { content: content || '{}', usage };
+    let lastError: Error | null = null;
+    const maxAttempts = 2;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), OpenAiAdapter.REQUEST_TIMEOUT_MS);
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: bodyStr,
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          if (attempt < maxAttempts && OpenAiAdapter.RETRYABLE_CODES.has(res.status)) {
+            logger.warn(
+              `[${localTimestamp()}] LLM API ${res.status} (attempt ${attempt}/${maxAttempts}), retrying in 2s`,
+            );
+            lastError = new Error(`OpenAI API error ${res.status}: ${errorText}`);
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          throw new Error(`OpenAI API error ${res.status}: ${errorText}`);
+        }
+
+        const data = await res.json() as any;
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) {
+          logger.warn(`[${localTimestamp()}] LLM returned empty content (model=${effectiveModel})`);
+        }
+        const usage: LlmUsageInfo = {
+          model: effectiveModel,
+          token_input: data.usage?.prompt_tokens ?? 0,
+          token_output: data.usage?.completion_tokens ?? 0,
+          request_count: 1,
+        };
+
+        return { content: content || '{}', usage };
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          lastError = new Error(`LLM request timed out after ${OpenAiAdapter.REQUEST_TIMEOUT_MS / 1000}s`);
+        } else {
+          lastError = err;
+        }
+        if (attempt < maxAttempts) {
+          logger.warn(
+            `[${localTimestamp()}] LLM request failed (attempt ${attempt}/${maxAttempts}): ${lastError!.message}, retrying in 2s`,
+          );
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    throw lastError ?? new Error('LLM request failed after all retries');
   }
 }
 

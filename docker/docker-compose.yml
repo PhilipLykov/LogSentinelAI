@@ -95,7 +95,7 @@ services:
       - INGEST_PORT=${PORT:-3000}
       - INGEST_API_KEY=${INGEST_API_KEY:-}
       # Fluent Bit log level (error, warn, info, debug, trace)
-      - LOG_LEVEL=${COLLECTOR_LOG_LEVEL:-info}
+      - LOG_LEVEL=${COLLECTOR_LOG_LEVEL:-warn}
       # Timezone: RFC 3164 syslog timestamps have NO timezone info.
       # Fluent Bit interprets them in the container's local time.
       # Set this to match the timezone of the MAJORITY of your syslog

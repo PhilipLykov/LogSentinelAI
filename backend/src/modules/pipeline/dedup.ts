@@ -96,6 +96,8 @@ export interface TemplateRepresentative {
   occurrenceCount: number;
   representativeEventId: string;
   representativeMessage: string;
+  /** All event IDs belonging to this template (populated during dedup). */
+  eventIds: string[];
 }
 
 /**
@@ -201,6 +203,7 @@ export async function extractTemplatesAndDedup(
       occurrenceCount: count,
       representativeEventId: events[0].id,
       representativeMessage: events[0].message,
+      eventIds: events.map((e) => e.id),
     });
   }
 

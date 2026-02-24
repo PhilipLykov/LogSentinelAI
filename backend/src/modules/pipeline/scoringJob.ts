@@ -353,29 +353,20 @@ export async function runPerEventScoringJob(
       `${lowScoreSkipped.length} low-skip, ${needsScoring.length} LLM`,
     );
 
-    // ── 4. Write scores for skipped/cached templates ────────
+    // ── 4. Collect all score writes (skipped/cached + LLM) ──
     let chunkScored = 0;
     const allScoredEvents: Array<{ id: string; system_id: string }> = [];
+    const pendingScoreWrites: Array<{ eventId: string; scores: ScoreResult }> = [];
 
     const allSkipped = [...severitySkipped, ...cacheHits, ...lowScoreSkipped];
     for (const { rep, score } of allSkipped) {
-      try {
-        const sysId = rep.systemId ?? '';
-        const linkedEventIds = await findLinkedEventIds(
-          db, rep.templateId, unscoredEventIds, sysId, esSystemIds,
-        );
-        if (linkedEventIds.length > 0) {
-          await db.transaction(async (trx) => {
-            for (const eid of linkedEventIds) {
-              await writeEventScores(trx, eid, score);
-            }
-          });
-          allScoredEvents.push(...linkedEventIds.map((eid) => ({ id: eid, system_id: sysId })));
-          chunkScored += linkedEventIds.length;
+      const sysId = rep.systemId ?? '';
+      for (const eid of rep.eventIds) {
+        if (unscoredEventIds.has(eid)) {
+          pendingScoreWrites.push({ eventId: eid, scores: score });
+          allScoredEvents.push({ id: eid, system_id: sysId });
+          chunkScored++;
         }
-      } catch (err) {
-        logger.error(`[${localTimestamp()}] Error writing cached/skipped scores for template ${rep.templateId}:`, err);
-        totalErrors++;
       }
     }
 
@@ -437,18 +428,13 @@ export async function runPerEventScoringJob(
             freshScores.set(rep.templateId, scoreResult);
 
             const repSysId = rep.systemId ?? '';
-            const linkedEventIds = await findLinkedEventIds(
-              db, rep.templateId, unscoredEventIds, repSysId, esSystemIds,
-            );
-
-            await db.transaction(async (trx) => {
-              for (const eid of linkedEventIds) {
-                await writeEventScores(trx, eid, scoreResult);
+            for (const eid of rep.eventIds) {
+              if (unscoredEventIds.has(eid)) {
+                pendingScoreWrites.push({ eventId: eid, scores: scoreResult });
+                allScoredEvents.push({ id: eid, system_id: repSysId });
+                chunkScored++;
               }
-            });
-
-            allScoredEvents.push(...linkedEventIds.map((eid) => ({ id: eid, system_id: repSysId })));
-            chunkScored += linkedEventIds.length;
+            }
           }
         } catch (err) {
           logger.error(`[${localTimestamp()}] Per-event scoring error for system ${systemId}:`, err);
@@ -457,30 +443,23 @@ export async function runPerEventScoringJob(
       }
     }
 
-    // ── 5b. Mark all processed events as scored ──────────────
+    // ── 5b. Flush all event scores in bulk ───────────────────
+    try {
+      await writeBulkEventScores(db, pendingScoreWrites);
+    } catch (err) {
+      logger.error(`[${localTimestamp()}] Bulk event score write failed:`, err);
+      totalErrors += pendingScoreWrites.length;
+    }
+
+    // ── 5c. Mark all processed events as scored ──────────────
     await markEventsScored(db, allScoredEvents, esSystemIds);
 
-    // ── 6. Update template cache columns ────────────────────
+    // ── 6. Batch-update template cache columns ───────────────
     if (freshScores.size > 0) {
-      const nowIso = new Date().toISOString();
-      for (const [templateId, scoreResult] of freshScores) {
-        try {
-          const ms = maxScore(scoreResult);
-          const meta = templateMeta.get(templateId);
-          const prevCount = meta?.score_count ?? 0;
-          const prevAvg = meta?.avg_max_score ?? 0;
-          const newCount = prevCount + 1;
-          const newAvg = (prevAvg * prevCount + ms) / newCount;
-
-          await db('message_templates').where({ id: templateId }).update({
-            last_scored_at: nowIso,
-            cached_scores: JSON.stringify(scoreResult),
-            score_count: newCount,
-            avg_max_score: Number(newAvg.toFixed(4)),
-          });
-        } catch (err) {
-          logger.warn(`[${localTimestamp()}] Failed to update template cache for ${templateId}:`, err);
-        }
+      try {
+        await batchUpdateTemplateCache(db, freshScores, templateMeta);
+      } catch (err) {
+        logger.warn(`[${localTimestamp()}] Batch template cache update failed:`, err);
       }
     }
 
@@ -518,61 +497,93 @@ export async function runPerEventScoringJob(
 }
 
 /**
- * Write non-zero event scores to the database.
- * Zero-score rows are skipped to reduce event_scores table bloat (~60-80% reduction).
- * The scored_at column on events tracks the "processed" state instead.
+ * Bulk-write non-zero event scores. Generates all rows for all events×criteria
+ * in one pass, then flushes in chunked multi-row INSERTs (PG max ~6500 params).
  */
-async function writeEventScores(db: Knex, eventId: string, scores: ScoreResult): Promise<void> {
-  const rows = CRITERIA
-    .map((c) => ({
-      id: uuidv4(),
-      event_id: eventId,
-      criterion_id: c.id,
-      score: Number((scores as any)[c.slug]) || 0,
-      score_type: 'event',
-    }))
-    .filter((r) => r.score > 0);
+async function writeBulkEventScores(
+  db: Knex,
+  entries: Array<{ eventId: string; scores: ScoreResult }>,
+): Promise<void> {
+  if (entries.length === 0) return;
 
-  if (rows.length === 0) return; // All criteria scored 0 — nothing to write
+  const allRows: Array<[string, string, number, number, string]> = [];
+  for (const { eventId, scores } of entries) {
+    for (const c of CRITERIA) {
+      const score = Number((scores as any)[c.slug]) || 0;
+      if (score > 0) {
+        allRows.push([uuidv4(), eventId, c.id, score, 'event']);
+      }
+    }
+  }
 
-  const placeholders = rows.map(() => '(?, ?, ?, ?, ?)').join(', ');
-  const values = rows.flatMap((r) => [r.id, r.event_id, r.criterion_id, r.score, r.score_type]);
+  if (allRows.length === 0) return;
 
-  await db.raw(`
-    INSERT INTO event_scores (id, event_id, criterion_id, score, score_type)
-    VALUES ${placeholders}
-    ON CONFLICT (event_id, criterion_id, score_type) DO NOTHING
-  `, values);
+  const PARAMS_PER_ROW = 5;
+  const MAX_PARAMS = 6000;
+  const CHUNK = Math.floor(MAX_PARAMS / PARAMS_PER_ROW);
+
+  for (let i = 0; i < allRows.length; i += CHUNK) {
+    const chunk = allRows.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '(?, ?, ?, ?, ?)').join(', ');
+    const values = chunk.flatMap((r) => r);
+    await db.raw(`
+      INSERT INTO event_scores (id, event_id, criterion_id, score, score_type)
+      VALUES ${placeholders}
+      ON CONFLICT (event_id, criterion_id, score_type) DO NOTHING
+    `, values);
+  }
 }
 
 /**
- * Find event IDs linked to a template that are in the unscored set.
- *
- * For PG-backed systems, queries the `events` table (template_id column).
- * For ES-backed systems, queries `es_event_metadata` (template_id column)
- * because ES event IDs are not UUIDs and don't exist in the PG events table.
+ * Batch-update template cache columns (last_scored_at, cached_scores, etc.)
+ * in a single UPDATE ... FROM (VALUES ...) statement instead of per-template UPDATEs.
  */
-async function findLinkedEventIds(
+async function batchUpdateTemplateCache(
   db: Knex,
-  templateId: string,
-  unscoredEventIds: Set<string>,
-  systemId: string,
-  esSystemIds: Set<string>,
-): Promise<string[]> {
-  if (esSystemIds.has(systemId)) {
-    // ES-backed: query es_event_metadata for linked ES events
-    const rows = await db('es_event_metadata')
-      .where({ system_id: systemId, template_id: templateId })
-      .whereIn('es_event_id', Array.from(unscoredEventIds))
-      .select('es_event_id');
-    return rows.map((r: any) => r.es_event_id);
+  freshScores: Map<string, ScoreResult>,
+  templateMeta: Map<string, { score_count: number; avg_max_score: number | null }>,
+): Promise<void> {
+  if (freshScores.size === 0) return;
+
+  const nowIso = new Date().toISOString();
+  const rows: Array<[string, string, string, number, number]> = [];
+
+  for (const [templateId, scoreResult] of freshScores) {
+    const ms = maxScore(scoreResult);
+    const meta = templateMeta.get(templateId);
+    const prevCount = meta?.score_count ?? 0;
+    const prevAvg = meta?.avg_max_score ?? 0;
+    const newCount = prevCount + 1;
+    const newAvg = (prevAvg * prevCount + ms) / newCount;
+
+    rows.push([
+      templateId,
+      nowIso,
+      JSON.stringify(scoreResult),
+      newCount,
+      Number(newAvg.toFixed(4)),
+    ]);
   }
-  // PG-backed: query the events table
-  const rows = await db('events')
-    .where({ template_id: templateId })
-    .whereIn('id', Array.from(unscoredEventIds))
-    .select('id');
-  return rows.map((r: any) => r.id);
+
+  const PARAMS_PER_ROW = 5;
+  const MAX_PARAMS = 6000;
+  const CHUNK = Math.floor(MAX_PARAMS / PARAMS_PER_ROW);
+
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '(?, ?, ?::jsonb, ?::int, ?::numeric)').join(', ');
+    const values = chunk.flatMap((r) => r);
+    await db.raw(`
+      UPDATE message_templates AS mt
+      SET last_scored_at = v.last_scored_at,
+          cached_scores  = v.cached_scores,
+          score_count    = v.score_count,
+          avg_max_score  = v.avg_max_score
+      FROM (VALUES ${placeholders})
+        AS v(id, last_scored_at, cached_scores, score_count, avg_max_score)
+      WHERE mt.id = v.id::uuid
+    `, values);
+  }
 }
 
 /**
