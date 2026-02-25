@@ -408,7 +408,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       });
       // Filter out events already marked as normal behavior (defense-in-depth:
       // scores may not be zeroed yet if retroactive update didn't match)
-      setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+      setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message, g.hosts?.[0], g.program ?? undefined)));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
@@ -614,7 +614,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               min_score: 0.001,
               show_acknowledged: showAcknowledged,
             });
-            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message, g.hosts?.[0], g.program ?? undefined)));
             setExpandedGroup(null);
             setExpandedGroupEvents([]);
           } catch { /* ignore refresh error */ }
@@ -691,7 +691,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                   show_acknowledged: showAcknowledgedRef.current,
                 });
                 if (mountedRef.current) {
-                  setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+                  setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message, g.hosts?.[0], g.program ?? undefined)));
                   setExpandedGroup(null);
                   setExpandedGroupEvents([]);
                 }
@@ -745,7 +745,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               min_score: 0.001,
               show_acknowledged: showAcknowledged,
             });
-            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message, g.hosts?.[0], g.program ?? undefined)));
             setExpandedGroup(null);
             setExpandedGroupEvents([]);
           } catch { /* ignore */ }
@@ -959,7 +959,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                               min_score: 0.001,
                               show_acknowledged: e.target.checked,
                             }).then((data) => {
-                              setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+                              setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message, g.hosts?.[0], g.program ?? undefined)));
                             }).catch(() => { /* ignore */ });
                           }
                         }}

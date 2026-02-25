@@ -5,6 +5,37 @@ All notable changes to LogSentinel AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9-beta] - 2026-02-25
+
+### Performance
+- **Scoring Pipeline N+1 Elimination**: Replaced per-event `writeEventScores` calls with bulk `writeBulkEventScores`, eliminated per-event `findLinkedEventIds` lookups by exposing `eventIds` directly from template grouping, and hoisted repeated DB config queries (privacy filter, task models, system metadata) out of inner loops. Reduces DB round-trips by ~95% in typical scoring runs
+- **LLM Timeout & Retry**: All LLM API calls (scoring, meta-analysis, RAG, discovery) now have 120-second `AbortController` timeouts with a single retry for transient HTTP errors (429/502/503/504). Non-retryable errors (400/401/403) fail immediately without wasting a second attempt
+- **Stale Score Elimination**: Re-evaluation now zeros out meta_scores on prior windows and uses `DISTINCT ON` for consistent score components; removed redundant expensive regex CTE from `recalcEffectiveScores` (default `skipNormalBehavior: true`)
+
+### Changed
+- **Maintenance Job Logger**: Replaced all `console.*` calls in the maintenance scheduler with the shared `logger` module, respecting `LOG_LEVEL` filtering in production and preventing self-ingestion via Fluent Bit
+- **Fluent Bit Log Level**: Default collector log level changed from `info` to `warn` to reduce internal log noise
+- **POSIX-Compatible Regex Patterns**: Normal behavior template generation now uses POSIX character classes (`[0-9]`, `[ \t]`, `[^ ]`) instead of PCRE shorthands (`\d`, `\s`, `\S`) for universal compatibility between JavaScript `RegExp` and PostgreSQL `~*` operator
+- **Model Name Validation**: Model identifiers now accept `/` and `:` characters, supporting OpenRouter-style names (e.g., `openai/gpt-4o`, `meta-llama/llama-3`)
+- **Selector Help Text Consistency**: Log source selector examples in Settings now use `[0-9]+` instead of `\d+`, matching the POSIX patterns used by the backend
+
+### Fixed
+- **LLM Adapter Retries Non-Retryable Errors**: The catch block in `chatCompletion` retried ALL errors including 400/401/403/500. Now only timeouts and retryable HTTP codes (429/502/503/504) trigger a retry; non-retryable errors throw immediately
+- **Events Marked Scored After Bulk Write Failure**: If `writeBulkEventScores` threw an exception, `markEventsScored` still ran, permanently skipping those events from future scoring. Now guarded by a `bulkWriteOk` flag
+- **Normal Behavior Filter Ignoring Host/Program**: Five locations in the drill-down filtered criterion groups with `isNormalBehavior(message)` without passing host/program parameters. Templates scoped to specific hosts or programs were displayed as "Normal" but not filtered from the list
+- **System Deletion Missing Cascade**: Deleting a monitored system did not clean up `findings`, `normal_behavior_templates`, or `discovery_suggestions` rows, causing orphaned records
+- **Pipeline Orchestrator Silent Error Swallowing**: The catch block in `tick()` had an empty body. Errors from `syncAdapterConfig()` are now logged with full stack trace
+- **Pipeline Scheduler Stale Timer After Stop**: If `stop()` was called during the async `loadPipelineConfig` in `scheduleNext`, a new timer could be set after the stop guard. Added post-await `stopped` re-check
+- **Login Network Error Handler**: The `login()` function in the frontend API client now wraps `fetch` in try/catch, showing a user-friendly "Network error" message instead of a cryptic browser TypeError
+- **CSS `--text-secondary` Variable**: Added the missing CSS custom property definition in `:root`, ensuring consistent secondary text color across all 6 usage sites
+- **Stale Scores After Ack + Re-evaluate**: O1 optimization condition incorrectly checked `scoreMap.size` instead of `events.length`; re-evaluation context now excludes acknowledged findings
+- **RFC 3164 Parser Truncating MikroTik Messages**: Greedy colon matching (`[^\:]*\:`) consumed message content; replaced with `(?:\:)?` and added comma to ident character class for MikroTik topics
+- **RFC 3164 Parser HP ProCurve Host Misidentification**: Switches with year-in-timestamp (e.g., `Feb 24 2026 23:52:34`) caused the year to be parsed as the host. Added optional `(?:\d{4} )?` year group
+- **`batchUpdateTemplateCache` SQL Type Error**: Missing explicit casts in `VALUES` clause caused `column "last_scored_at" is of type timestamp with time zone but expression is of type text`. Added `::uuid` and `::timestamptz` casts
+- **LLM Base URL Double Slash**: Trailing slashes on the base URL produced `../v1//chat/completions`. Now stripped consistently in adapter, config resolver, RAG, and discovery modules
+- **Re-evaluate Phase Timing Invisible**: Timing logs used `app.log.info` (Fastify Pino, JSON format) at `info` level, hidden by default `LOG_LEVEL=warn`. Switched to shared `logger.warn`
+- **Normal Behavior Regex PCRE/POSIX Mismatch**: Generated patterns used `\d+` which works in JavaScript but may behave differently in PostgreSQL `~*`. Replaced with `[0-9]+` throughout
+
 ## [0.8.8-beta] - 2026-02-23
 
 ### Added

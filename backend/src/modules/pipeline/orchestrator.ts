@@ -173,7 +173,8 @@ export function startPipelineScheduler(
       const result = await runPipeline(db, llm);
       const hadActivity = result.scored > 0 || result.analyzed > 0;
       void scheduleNext(hadActivity);
-    } catch {
+    } catch (err) {
+      logger.error(`[${localTimestamp()}] Pipeline tick error:`, err);
       void scheduleNext(false);
     } finally {
       running = false;
@@ -190,6 +191,8 @@ export function startPipelineScheduler(
       minMs = Math.max(1, cfg.pipeline_min_interval_minutes) * 60_000;
       maxMs = Math.max(1, cfg.pipeline_max_interval_minutes) * 60_000;
     } catch { /* use defaults */ }
+
+    if (stopped) return; // Re-check after async config load
 
     const prevMs = currentIntervalMs;
     if (hadActivity) {

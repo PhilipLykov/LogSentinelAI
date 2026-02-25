@@ -444,15 +444,20 @@ export async function runPerEventScoringJob(
     }
 
     // ── 5b. Flush all event scores in bulk ───────────────────
+    let bulkWriteOk = true;
     try {
       await writeBulkEventScores(db, pendingScoreWrites);
     } catch (err) {
+      bulkWriteOk = false;
       logger.error(`[${localTimestamp()}] Bulk event score write failed:`, err);
       totalErrors += pendingScoreWrites.length;
     }
 
     // ── 5c. Mark all processed events as scored ──────────────
-    await markEventsScored(db, allScoredEvents, esSystemIds);
+    // Skip marking if the bulk write failed — events need to be re-processed
+    if (bulkWriteOk) {
+      await markEventsScored(db, allScoredEvents, esSystemIds);
+    }
 
     // ── 6. Batch-update template cache columns ───────────────
     if (freshScores.size > 0) {

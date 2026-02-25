@@ -248,6 +248,12 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         await eventSource.cascadeDeleteSystem(id, trx);
         // Delete ES event metadata (if any)
         await trx('es_event_metadata').where({ system_id: id }).del();
+        // Delete findings
+        await trx('findings').where({ system_id: id }).del();
+        // Delete normal behavior templates scoped to this system
+        await trx('normal_behavior_templates').where({ system_id: id }).del();
+        // Delete discovery suggestions referencing this system
+        await trx('discovery_suggestions').where({ merge_target_id: id }).del();
         // Delete log sources
         await trx('log_sources').where({ system_id: id }).del();
         // Delete message templates

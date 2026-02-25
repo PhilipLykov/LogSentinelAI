@@ -12,6 +12,7 @@
 
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 import { loadBackupConfig, runBackup, cleanupOldBackups } from './backupJob.js';
 import { getEventSource } from '../../services/eventSourceFactory.js';
 
@@ -63,7 +64,7 @@ export async function loadMaintenanceConfig(db: Knex): Promise<MaintenanceConfig
     }
     return cfg;
   } catch (err) {
-    console.error(`[${localTimestamp()}] Failed to load maintenance config:`, err);
+    logger.error(`[${localTimestamp()}] Failed to load maintenance config:`, err);
     return { ...CONFIG_DEFAULTS };
   }
 }
@@ -117,11 +118,11 @@ async function ensureFuturePartitions(db: Knex, monthsAhead: number = 3): Promis
           FOR VALUES FROM ('${fromStr}') TO ('${toStr}')
         `);
         created++;
-        console.log(`[${localTimestamp()}] Maintenance: created partition ${partName} (${fromStr} to ${toStr})`);
+        logger.info(`[${localTimestamp()}] Maintenance: created partition ${partName} (${fromStr} to ${toStr})`);
       } catch (err: any) {
         // Partition might overlap with default or another partition — log but don't fail
         if (!err.message.includes('already exists')) {
-          console.warn(`[${localTimestamp()}] Maintenance: could not create partition ${partName}: ${err.message}`);
+          logger.warn(`[${localTimestamp()}] Maintenance: could not create partition ${partName}: ${err.message}`);
         }
       }
     }
@@ -174,11 +175,11 @@ async function dropExpiredPartitions(db: Knex, cutoffDate: Date): Promise<{ drop
         droppedPartitions.push(partName);
         eventsFreed += count;
 
-        console.log(
+        logger.info(
           `[${localTimestamp()}] Maintenance: dropped partition ${partName} (${count} events, end: ${toMatch[1]})`
         );
       } catch (err: any) {
-        console.error(`[${localTimestamp()}] Maintenance: failed to drop partition ${partName}: ${err.message}`);
+        logger.error(`[${localTimestamp()}] Maintenance: failed to drop partition ${partName}: ${err.message}`);
       }
     }
   }
@@ -193,7 +194,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
   const started_at = new Date().toISOString();
   const errors: string[] = [];
 
-  console.log(`[${localTimestamp()}] Maintenance: starting database maintenance run...`);
+  logger.info(`[${localTimestamp()}] Maintenance: starting database maintenance run...`);
 
   const config = await loadMaintenanceConfig(db);
   let totalEventsDeleted = 0;
@@ -209,7 +210,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       // Ensure future partitions exist (3 months ahead)
       const newParts = await ensureFuturePartitions(db, 3);
       if (newParts > 0) {
-        console.log(`[${localTimestamp()}] Maintenance: created ${newParts} new future partition(s)`);
+        logger.info(`[${localTimestamp()}] Maintenance: created ${newParts} new future partition(s)`);
       }
 
       // Drop partitions that are fully older than the global retention cutoff
@@ -220,14 +221,14 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       const { droppedPartitions, eventsFreed } = await dropExpiredPartitions(db, globalCutoff);
       if (droppedPartitions.length > 0) {
         totalEventsDeleted += eventsFreed;
-        console.log(
+        logger.info(
           `[${localTimestamp()}] Maintenance: dropped ${droppedPartitions.length} expired partition(s), ` +
           `freed ~${eventsFreed} events`,
         );
       }
     } catch (err: any) {
       const msg = `Partition management failed: ${err.message}`;
-      console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+      logger.error(`[${localTimestamp()}] Maintenance: ${msg}`);
       errors.push(msg);
     }
   }
@@ -261,14 +262,14 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
           totalEventsDeleted += result.deleted_events;
           totalScoresDeleted += result.deleted_scores;
 
-          console.log(
+          logger.info(
             `[${localTimestamp()}] Maintenance: ${system.name} — deleted ${result.deleted_events} events ` +
             `and ${result.deleted_scores} scores older than ${retentionDays} days`,
           );
         }
       } catch (err: any) {
         const msg = `Retention cleanup failed for system ${system.name}: ${err.message}`;
-        console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+        logger.error(`[${localTimestamp()}] Maintenance: ${msg}`);
         errors.push(msg);
       }
     }
@@ -298,7 +299,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
           )
           .del();
         if (orphanedWindows > 0) {
-          console.log(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedWindows} orphaned analysis windows`);
+          logger.info(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedWindows} orphaned analysis windows`);
         }
       }
     } catch (err: any) {
@@ -325,7 +326,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
           )
           .del();
         if (orphanedTemplates > 0) {
-          console.log(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedTemplates} orphaned message templates`);
+          logger.info(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedTemplates} orphaned message templates`);
         }
       }
     } catch (err: any) {
@@ -338,7 +339,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
         .where('expires_at', '<', new Date().toISOString())
         .del();
       if (expiredSessions > 0) {
-        console.log(`[${localTimestamp()}] Maintenance: cleaned up ${expiredSessions} expired sessions`);
+        logger.info(`[${localTimestamp()}] Maintenance: cleaned up ${expiredSessions} expired sessions`);
       }
     } catch (err: any) {
       // sessions table might not exist yet — ignore
@@ -362,7 +363,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
 
   } catch (err: any) {
     const msg = `Data retention cleanup failed: ${err.message}`;
-    console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+    logger.error(`[${localTimestamp()}] Maintenance: ${msg}`);
     errors.push(msg);
   }
 
@@ -381,10 +382,10 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       }
     }
     vacuumRan = true;
-    console.log(`[${localTimestamp()}] Maintenance: VACUUM ANALYZE completed`);
+    logger.info(`[${localTimestamp()}] Maintenance: VACUUM ANALYZE completed`);
   } catch (err: any) {
     const msg = `VACUUM ANALYZE failed: ${err.message}`;
-    console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+    logger.error(`[${localTimestamp()}] Maintenance: ${msg}`);
     errors.push(msg);
   }
 
@@ -418,10 +419,10 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       }
     }
     reindexRan = true;
-    console.log(`[${localTimestamp()}] Maintenance: REINDEX completed (${reindexedCount}/${indexes.length} indexes)`);
+    logger.info(`[${localTimestamp()}] Maintenance: REINDEX completed (${reindexedCount}/${indexes.length} indexes)`);
   } catch (err: any) {
     const msg = `REINDEX failed: ${err.message}`;
-    console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+    logger.error(`[${localTimestamp()}] Maintenance: ${msg}`);
     errors.push(msg);
   }
 
@@ -451,7 +452,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
       }
 
       if (shouldBackup) {
-        console.log(`[${localTimestamp()}] Maintenance: starting scheduled backup...`);
+        logger.info(`[${localTimestamp()}] Maintenance: starting scheduled backup...`);
         const backupResult = await runBackup(db);
         backupRan = backupResult.success;
 
@@ -471,7 +472,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
     }
   } catch (err: any) {
     const msg = `Backup step failed: ${err.message}`;
-    console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+    logger.error(`[${localTimestamp()}] Maintenance: ${msg}`);
     errors.push(msg);
   }
 
@@ -503,10 +504,10 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
     });
   } catch {
     // maintenance_log table might not exist on first run
-    console.warn(`[${localTimestamp()}] Maintenance: could not log run to maintenance_log table`);
+    logger.warn(`[${localTimestamp()}] Maintenance: could not log run to maintenance_log table`);
   }
 
-  console.log(
+  logger.info(
     `[${localTimestamp()}] Maintenance: completed in ${duration_ms}ms — ` +
     `${totalEventsDeleted} events deleted, ${totalScoresDeleted} scores deleted, ` +
     `${errors.length} error(s)`,
@@ -525,7 +526,7 @@ export function startMaintenanceScheduler(
 
   const timer = setInterval(async () => {
     if (running) {
-      console.log(`[${localTimestamp()}] Maintenance: previous run still in progress, skipping.`);
+      logger.info(`[${localTimestamp()}] Maintenance: previous run still in progress, skipping.`);
       return;
     }
     running = true;
@@ -550,18 +551,18 @@ export function startMaintenanceScheduler(
 
       await runMaintenance(db);
     } catch (err) {
-      console.error(`[${localTimestamp()}] Maintenance scheduler error:`, err);
+      logger.error(`[${localTimestamp()}] Maintenance scheduler error:`, err);
     } finally {
       running = false;
     }
   }, intervalMs);
 
-  console.log(`[${localTimestamp()}] Maintenance scheduler started (check interval=${intervalMs}ms).`);
+  logger.info(`[${localTimestamp()}] Maintenance scheduler started (check interval=${intervalMs}ms).`);
 
   return {
     stop: () => {
       clearInterval(timer);
-      console.log(`[${localTimestamp()}] Maintenance scheduler stopped.`);
+      logger.info(`[${localTimestamp()}] Maintenance scheduler stopped.`);
     },
   };
 }

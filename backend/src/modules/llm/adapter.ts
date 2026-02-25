@@ -781,13 +781,16 @@ export class OpenAiAdapter implements LlmAdapter {
         } else {
           lastError = err;
         }
-        if (attempt < maxAttempts) {
+        const isRetryable = err.name === 'AbortError' ||
+          (lastError?.message && /\b(429|502|503|504)\b/.test(lastError.message));
+        if (isRetryable && attempt < maxAttempts) {
           logger.warn(
             `[${localTimestamp()}] LLM request failed (attempt ${attempt}/${maxAttempts}): ${lastError!.message}, retrying in 2s`,
           );
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
+        throw lastError!;
       } finally {
         clearTimeout(timer);
       }

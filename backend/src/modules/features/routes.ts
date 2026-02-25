@@ -287,7 +287,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         if (typeof model !== 'string' || model.trim() === '' || model.length > 64) {
           return reply.code(400).send({ error: 'model must be a non-empty string (max 64 chars).' });
         }
-        if (!/^[a-zA-Z0-9._-]+$/.test(model)) {
+        if (!/^[a-zA-Z0-9._\-\/\:]+$/.test(model)) {
           return reply.code(400).send({ error: 'model contains invalid characters.' });
         }
       }
