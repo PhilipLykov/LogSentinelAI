@@ -5871,6 +5871,41 @@ tr.event-row-acked:hover {
   border-radius: 3px;
   font-size: 0.8rem;
 }
+.mark-ok-regex-ref {
+  margin-top: 8px;
+  font-size: 0.78rem;
+}
+.mark-ok-regex-ref summary {
+  cursor: pointer;
+  color: var(--accent, #3b82f6);
+  font-size: 0.78rem;
+  user-select: none;
+}
+.mark-ok-regex-ref summary:hover {
+  text-decoration: underline;
+}
+.regex-ref-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+  font-size: 0.75rem;
+}
+.regex-ref-table td {
+  padding: 2px 8px 2px 0;
+  vertical-align: top;
+  border: none;
+}
+.regex-ref-table td:first-child {
+  white-space: nowrap;
+  width: 100px;
+}
+.regex-ref-table code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  color: var(--accent, #3b82f6);
+}
 .mark-ok-filter-row {
   display: flex;
   gap: 12px;

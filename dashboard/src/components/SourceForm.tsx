@@ -32,6 +32,38 @@ function selectorToGroups(selector: Record<string, string> | Record<string, stri
   return [{ rows: rows.length > 0 ? rows : [{ field: 'host', pattern: '' }] }];
 }
 
+/**
+ * Auto-escape plain IP addresses and hostnames that the user entered
+ * without regex syntax. Dots in a plain IP like `192.168.30.14` would
+ * otherwise match any character; this converts it to `^192\.168\.30\.14$`.
+ */
+function autoEscapePattern(field: string, pattern: string): string {
+  const trimmed = pattern.trim();
+  if (!trimmed || !trimmed.includes('.')) return trimmed;
+  // Already contains regex metacharacters — user knows what they're doing
+  if (/[\\^$*+?[\](){}|]/.test(trimmed)) return trimmed;
+
+  if (field === 'source_ip') {
+    // Full IPv4: 192.168.30.14
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(trimmed)) {
+      return `^${trimmed.replace(/\./g, '\\.')}$`;
+    }
+    // IP prefix ending with dot: 192.168.30. or 192.168.
+    if (/^\d{1,3}(\.\d{1,3})*\.$/.test(trimmed)) {
+      return `^${trimmed.replace(/\./g, '\\.')}`;
+    }
+  }
+
+  if (field === 'host') {
+    // Plain hostname with dots: web-01.example.com
+    if (/^[a-zA-Z0-9][a-zA-Z0-9.\-]*$/.test(trimmed)) {
+      return `^${trimmed.replace(/\./g, '\\.')}$`;
+    }
+  }
+
+  return trimmed;
+}
+
 function groupsToSelector(groups: SelectorGroup[]): Record<string, string> | Record<string, string>[] {
   const validGroups = groups
     .map(g => {
@@ -39,7 +71,7 @@ function groupsToSelector(groups: SelectorGroup[]): Record<string, string> | Rec
       for (const row of g.rows) {
         const field = row.field.trim();
         const pattern = row.pattern.trim();
-        if (field && pattern) result[field] = pattern;
+        if (field && pattern) result[field] = autoEscapePattern(field, pattern);
       }
       return result;
     })
@@ -215,7 +247,15 @@ export function SourceForm({
                               setErrors((prev) => ({ ...prev, [`pattern-${gi}-${ri}`]: '' }));
                             }
                           }}
-                          placeholder="regex pattern (e.g. .* or ^web-\\d+)"
+                          onBlur={() => {
+                            const escaped = autoEscapePattern(row.field, row.pattern);
+                            if (escaped !== row.pattern.trim()) {
+                              updateGroupRow(gi, ri, { pattern: escaped });
+                            }
+                          }}
+                          placeholder={row.field === 'source_ip'
+                            ? 'IP or regex (e.g. 192.168.30.14 or ^10\\.0\\.)'
+                            : 'regex pattern (e.g. .* or ^web-[0-9]+)'}
                           className={`selector-pattern${errors[`pattern-${gi}-${ri}`] ? ' input-error' : ''}`}
                           aria-label={`Pattern for group ${gi + 1} rule ${ri + 1}`}
                         />

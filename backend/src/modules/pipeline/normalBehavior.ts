@@ -11,11 +11,16 @@ import { logger } from '../../config/logger.js';
  * reducing noise and saving tokens.
  *
  * Patterns are stored as full regex strings (anchored with ^ … $) so
- * users can express precise match conditions (e.g., `[0-9]{1,3}` for a
- * number vs `.*` for "anything").
+ * users can express precise match conditions.
  *
- * Generated patterns use POSIX character classes ([0-9] instead of \d)
- * for compatibility with both JavaScript regex and PostgreSQL's ~* operator.
+ * Generated patterns are intentionally SIMPLE:
+ *   [^ ]+     — any non-space token (UUIDs, MACs, interfaces, etc.)
+ *   [0-9]+    — any number
+ *   .*        — anything (between known delimiters)
+ *   [0-9a-f]+ — hex values
+ *
+ * No {n} or {n,m} quantifiers — they add complexity without value and
+ * can cause compatibility issues between JS regex and PostgreSQL ~*.
  */
 
 // ── Types ────────────────────────────────────────────────────
@@ -68,66 +73,77 @@ export function escapeRegex(str: string): string {
 
 /**
  * Replacement rules applied in order.  Each rule has a detection regex
- * and a replacement regex string.  The detection regex captures the
- * variable part of the message; it is replaced with the targeted regex
- * pattern that matches similar values without being overly broad.
+ * (runs in JavaScript to find variable parts) and a replacement string
+ * (stored in the database, matched by both JS RegExp and PostgreSQL ~*).
+ *
+ * Replacement patterns are intentionally kept SIMPLE:
+ *   - `[^ ]+`   for structured tokens (UUIDs, MACs, interfaces)
+ *   - `[0-9]+`  for standalone numbers
+ *   - `.*`      only inside quotes or between known delimiters
+ * No `{n}` or `{n,m}` quantifiers — they add complexity without value.
  *
  * Order matters: more specific patterns (UUIDs, MACs, IPs) must run
  * before the generic "standalone numbers" rule.
  */
 const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: string }> = [
-  // UUIDs (8-4-4-4-12 hex)
+  // UUIDs (8-4-4-4-12 hex) → any non-space token
   {
     detect: /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-    replacement: '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+    replacement: '[^ ]+',
     tag: 'UUID',
   },
-  // MAC addresses (colon/dash separated)
+  // MAC addresses (colon/dash separated) → any non-space token
   {
     detect: /\b[0-9a-f]{2}([:-])[0-9a-f]{2}(?:\1[0-9a-f]{2}){4}\b/gi,
-    replacement: '[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}',
+    replacement: '[^ ]+',
     tag: 'MAC',
   },
-  // MAC addresses (Cisco dot notation aabb.ccdd.eeff)
+  // MAC addresses (Cisco dot notation aabb.ccdd.eeff) → any non-space token
   {
     detect: /\b[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/gi,
-    replacement: '[0-9a-f]{4}\\.[0-9a-f]{4}\\.[0-9a-f]{4}',
+    replacement: '[^ ]+',
     tag: 'MAC_DOT',
   },
-  // IPv4 addresses with optional CIDR
+  // IPv4 with CIDR (must come before plain IPv4)
   {
-    detect: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\/\d{1,2})?\b/g,
-    replacement: '[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}(?:\\/[0-9]{1,2})?',
+    detect: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}\b/g,
+    replacement: '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+',
+    tag: 'IPv4_CIDR',
+  },
+  // IPv4 addresses (plain)
+  {
+    detect: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
+    replacement: '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+',
     tag: 'IPv4',
   },
-  // IPv6 addresses (simplified)
+  // IPv6 addresses → any non-space token
   {
     detect: /\b[0-9a-f]{1,4}(:[0-9a-f]{1,4}){2,7}\b/gi,
-    replacement: '[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){2,7}',
+    replacement: '[^ ]+',
     tag: 'IPv6',
   },
-  // Network interface names (Cisco/HP/Juniper long form)
+  // Network interface names (Cisco/HP/Juniper long form) → non-space token
   {
     detect: /\b(?:(?:Ten)?(?:Hundred)?(?:Gigabit)?(?:Fast)?Ethernet|Gi|Fa|Te|Hu|Eth|eth|ens|em|enp\d+s)\d+(?:\/\d+)*/gi,
-    replacement: '(?:(?:Ten)?(?:Hundred)?(?:Gigabit)?(?:Fast)?Ethernet|Gi|Fa|Te|Hu|Eth|eth|ens|em|enp[0-9]+s)[^ ]+',
+    replacement: '[^ ]+',
     tag: 'IFACE',
   },
-  // Network interface names (Port-channel, Vlan, Loopback, etc.)
+  // Network interface names (Port-channel, Vlan, Loopback, etc.) → non-space token
   {
     detect: /\b(?:Port-channel|Po|po|Vlan|vlan|Loopback|Lo|Tunnel|Tu|BVI|bvi|mgmt|Mgmt)\d+\b/gi,
-    replacement: '(?:Port-channel|Po|po|Vlan|vlan|Loopback|Lo|Tunnel|Tu|BVI|bvi|mgmt|Mgmt)[0-9]+',
+    replacement: '[^ ]+',
     tag: 'IFACE2',
   },
   // "Switch N", "Stack N", "Unit N", "Slot N", "Module N"
   {
     detect: /\b(?:Switch|Stack|Unit|Slot|Module|Member|Node)\s+\d+\b/gi,
-    replacement: '(?:Switch|Stack|Unit|Slot|Module|Member|Node)[ \\t]+[0-9]+',
+    replacement: '[^ ]+ [0-9]+',
     tag: 'DEVICE_ID',
   },
   // MST/STP instance identifiers
   {
     detect: /\b(?:MST|MSTI|STP)\d+\b/gi,
-    replacement: '(?:MST|MSTI|STP)[0-9]+',
+    replacement: '[^ ]+',
     tag: 'STP_ID',
   },
   // Hex strings (0x-prefixed 4+ chars)
@@ -142,10 +158,10 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
     replacement: '[0-9a-f]+',
     tag: 'HEX_LONG',
   },
-  // File/directory paths (2+ segments)
+  // File/directory paths (2+ segments) → /non-space
   {
     detect: /(?:\/[\w.+-]+){2,}/g,
-    replacement: '(?:\\/[\\w.+-]+)+',
+    replacement: '/[^ ]+',
     tag: 'PATH',
   },
   // Double-quoted strings
@@ -161,8 +177,7 @@ const REPLACEMENT_RULES: Array<{ detect: RegExp; replacement: string; tag: strin
     tag: 'SQUOTE',
   },
   // Numeric suffix after underscore (e.g., disk_03, cpu_0, port_8080)
-  // Must come before NUM — these aren't caught by \b\d+\b because
-  // underscore is a word character (no boundary between _ and 0).
+  // Must come before NUM — underscore is a word character so \b won't fire.
   {
     detect: /_\d+\b/g,
     replacement: '_[0-9]+',

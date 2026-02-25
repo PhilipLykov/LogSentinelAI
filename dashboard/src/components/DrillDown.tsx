@@ -1647,10 +1647,28 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                   </div>
                 </div>
 
-                <p className="mark-ok-hint">
-                  Patterns use regex syntax: <code>[0-9]+</code> = digits, <code>.*</code> = anything,
-                  <code>^...$</code> = exact match. Leave host/program empty to match all.
-                </p>
+                <details className="mark-ok-regex-ref">
+                  <summary>Regex quick reference</summary>
+                  <table className="regex-ref-table">
+                    <tbody>
+                      <tr><td><code>{'.*'}</code></td><td>any text (including empty)</td></tr>
+                      <tr><td><code>{'.+'}</code></td><td>any text (at least one character)</td></tr>
+                      <tr><td><code>{'[^ ]+'}</code></td><td>any non-space word</td></tr>
+                      <tr><td><code>{'[0-9]+'}</code></td><td>one or more digits</td></tr>
+                      <tr><td><code>{'[0-9a-f]+'}</code></td><td>hex value</td></tr>
+                      <tr><td><code>{'[a-zA-Z]+'}</code></td><td>one or more letters</td></tr>
+                      <tr><td><code>{'\\.'}</code></td><td>literal dot (unescaped <code>.</code> = any character)</td></tr>
+                      <tr><td><code>{'^...$'}</code></td><td>anchors: match entire string from start to end</td></tr>
+                      <tr><td><code>{'(a|b)'}</code></td><td>either "a" or "b"</td></tr>
+                      <tr><td><code>{'?'}</code></td><td>previous element is optional</td></tr>
+                    </tbody>
+                  </table>
+                  <p className="mark-ok-hint" style={{ marginTop: '0.3rem' }}>
+                    The auto-generated pattern replaces variable data (IPs, numbers, IDs)
+                    with simple placeholders. You can edit the pattern before saving.
+                    Leave host/program empty to match all.
+                  </p>
+                </details>
               </div>
             )}
 
