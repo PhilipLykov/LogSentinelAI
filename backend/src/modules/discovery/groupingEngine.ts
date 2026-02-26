@@ -111,9 +111,9 @@ interface BufferGroup {
  * Run the discovery grouping engine.
  * Aggregates discovery_buffer into discovery_suggestions.
  */
-export async function runGroupingEngine(db: Knex): Promise<{ created: number; updated: number; purged: number }> {
+export async function runGroupingEngine(db: Knex): Promise<{ created: number; updated: number; purged: number; suppressed: number }> {
   const cfg = await loadDiscoveryConfig(db);
-  if (!cfg.enabled) return { created: 0, updated: 0, purged: 0 };
+  if (!cfg.enabled) return { created: 0, updated: 0, purged: 0, suppressed: 0 };
 
   // 1. Purge old buffer entries
   const purged = await purgeDiscoveryBuffer(db, cfg.buffer_ttl_hours);
@@ -229,14 +229,48 @@ export async function runGroupingEngine(db: Knex): Promise<{ created: number; up
     g.sample_messages = sampleRows.map((r: any) => r.message_sample).filter(Boolean);
   }
 
-  // 5. Check for existing system affinity
+  // 5. Load existing log sources and classify as catch-all vs. specific
   const existingSources = await db('log_sources')
     .join('monitored_systems', 'log_sources.system_id', 'monitored_systems.id')
     .select('log_sources.selector', 'monitored_systems.id as system_id', 'monitored_systems.name as system_name');
 
-  // 6. Upsert into discovery_suggestions
+  const WILDCARD_PATTERNS = new Set(['.*', '^.*$', '.+', '^.+$']);
+
+  function isCatchAllSelector(sel: any): boolean {
+    const groups = Array.isArray(sel) ? sel : [sel];
+    return groups.every((group: any) => {
+      if (!group || typeof group !== 'object') return true;
+      const entries = Object.entries(group).filter(([, v]) => v !== undefined && v !== '');
+      if (entries.length === 0) return true;
+      return entries.every(([, pattern]) => WILDCARD_PATTERNS.has(String(pattern)));
+    });
+  }
+
+  function matchesExistingSource(
+    host: string | null,
+    ip: string | null,
+  ): { systemId: string; isSpecific: boolean } | null {
+    for (const src of existingSources) {
+      try {
+        const sel = typeof src.selector === 'string' ? JSON.parse(src.selector) : src.selector;
+        const selectors = Array.isArray(sel) ? sel : [sel];
+        for (const s of selectors) {
+          if (!s || typeof s !== 'object') continue;
+          const hostMatch = s.host && host && new RegExp(s.host, 'i').test(host);
+          const ipMatch = s.source_ip && ip && new RegExp(s.source_ip, 'i').test(ip);
+          if (hostMatch || ipMatch) {
+            return { systemId: src.system_id, isSpecific: !isCatchAllSelector(sel) };
+          }
+        }
+      } catch { /* skip bad selectors */ }
+    }
+    return null;
+  }
+
+  // 6. Upsert into discovery_suggestions (skip groups already covered)
   let created = 0;
   let updated = 0;
+  let suppressed = 0;
   const now = new Date().toISOString();
 
   for (const g of groups) {
@@ -247,25 +281,33 @@ export async function runGroupingEngine(db: Knex): Promise<{ created: number; up
     }
 
     const groupKey = computeGroupKey(g.host, g.source_ip, displayProgram);
-    const suggestedName = generateSuggestedName(g.host, g.source_ip, displayProgram);
 
-    let mergeTargetId: string | null = null;
-    for (const src of existingSources) {
-      try {
-        const sel = typeof src.selector === 'string' ? JSON.parse(src.selector) : src.selector;
-        const selectors = Array.isArray(sel) ? sel : [sel];
-        for (const s of selectors) {
-          if (!s || typeof s !== 'object') continue;
-          const hostMatch = s.host && g.host && new RegExp(s.host, 'i').test(g.host);
-          const ipMatch = s.source_ip && g.source_ip && new RegExp(s.source_ip, 'i').test(g.source_ip);
-          if (hostMatch || ipMatch) {
-            mergeTargetId = src.system_id;
-            break;
-          }
-        }
-      } catch { /* skip bad selectors */ }
-      if (mergeTargetId) break;
+    // If a specific (non-catch-all) source already covers this host/IP,
+    // skip the suggestion entirely and clean up stale data.
+    const sourceMatch = matchesExistingSource(g.host, g.source_ip);
+    if (sourceMatch?.isSpecific) {
+      const stale = await db('discovery_suggestions')
+        .where({ group_key: groupKey })
+        .whereIn('status', ['pending', 'dismissed'])
+        .first('id');
+      if (stale) {
+        await db('discovery_suggestions').where({ id: stale.id }).del();
+      }
+      // Purge covered buffer entries so they don't regenerate next run
+      if (g.host || g.source_ip) {
+        await db('discovery_buffer')
+          .modify((qb) => {
+            if (g.host) qb.where('host', g.host);
+            if (g.source_ip) qb.where('source_ip', g.source_ip);
+          })
+          .del();
+      }
+      suppressed++;
+      continue;
     }
+
+    const suggestedName = generateSuggestedName(g.host, g.source_ip, displayProgram);
+    const mergeTargetId = sourceMatch?.systemId ?? null;
 
     const existing = await db('discovery_suggestions').where({ group_key: groupKey }).first();
     if (existing) {
@@ -308,11 +350,11 @@ export async function runGroupingEngine(db: Knex): Promise<{ created: number; up
     }
   }
 
-  if (created > 0 || updated > 0) {
+  if (created > 0 || updated > 0 || suppressed > 0) {
     logger.info(
-      `[${localTimestamp()}] Discovery grouping: ${created} new suggestions, ${updated} updated`,
+      `[${localTimestamp()}] Discovery grouping: ${created} new, ${updated} updated, ${suppressed} suppressed (already covered)`,
     );
   }
 
-  return { created, updated, purged };
+  return { created, updated, purged, suppressed };
 }
