@@ -264,20 +264,21 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        // Return immediately
+        // Recalculate scores synchronously so the frontend receives
+        // fresh data when it refreshes after the response.
+        try {
+          await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after ack failed: ${err.message}`);
+        }
+
         reply.send({
           acknowledged: totalAcked,
           message: `${totalAcked} event${totalAcked !== 1 ? 's' : ''} acknowledged.`,
         });
 
-        // Run expensive operations in the background (serialized via internal mutex)
+        // Finding transition can run in the background (doesn't affect score bars)
         setImmediate(async () => {
-          try {
-            await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
-          } catch (err: any) {
-            app.log.error(`[${localTimestamp()}] Effective score recalc after ack failed: ${err.message}`);
-          }
-
           try {
             let msgQuery = db('events')
               .whereNotNull('acknowledged_at')
@@ -370,20 +371,16 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        reply.send({
+        try {
+          await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after unack failed: ${err.message}`);
+        }
+
+        return reply.send({
           unacknowledged: result,
           message: `${result} event${result !== 1 ? 's' : ''} un-acknowledged.`,
         });
-
-        setImmediate(async () => {
-          try {
-            await recalcEffectiveScores(db, sysId, { skipNormalBehavior: true });
-          } catch (err: any) {
-            app.log.error(`[${localTimestamp()}] Effective score recalc after unack failed: ${err.message}`);
-          }
-        });
-
-        return reply;
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Event un-acknowledge error: ${err.message}`);
         return reply.code(500).send({ error: 'Event un-acknowledgement failed.' });
@@ -519,20 +516,22 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        // Return immediately — user sees instant feedback
+        // Recalculate scores synchronously so the frontend receives
+        // fresh data when it refreshes after the response.
+        try {
+          const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
+          app.log.debug(`[${localTimestamp()}] Group ack: ${updatedWindows} windows recalculated (system=${system_id})`);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after group ack failed: ${err.message}`);
+        }
+
         reply.send({
           acknowledged: ackResult,
           message: `${ackResult} event${ackResult !== 1 ? 's' : ''} in group acknowledged.`,
         });
 
-        // Run expensive operations in the background (serialized via internal mutex)
+        // Finding transition can run in the background (doesn't affect score bars)
         setImmediate(async () => {
-          try {
-            const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
-            app.log.debug(`[${localTimestamp()}] Group ack background: ${updatedWindows} windows recalculated (system=${system_id})`);
-          } catch (err: any) {
-            app.log.error(`[${localTimestamp()}] Effective score recalc after group ack failed: ${err.message}`);
-          }
           try {
             const tf = await transitionFindingsOnAck(db, system_id, ackedMsgs);
             if (tf > 0) app.log.debug(`[${localTimestamp()}] Group ack background: ${tf} findings transitioned (system=${system_id})`);
@@ -663,23 +662,17 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           session_id: sessionId,
         });
 
-        // Return immediately
-        reply.send({
+        try {
+          const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
+          app.log.debug(`[${localTimestamp()}] Group unack: ${updatedWindows} windows recalculated (system=${system_id})`);
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Effective score recalc after group unack failed: ${err.message}`);
+        }
+
+        return reply.send({
           unacknowledged: unackCount,
           message: `${unackCount} event${unackCount !== 1 ? 's' : ''} in group un-acknowledged.`,
         });
-
-        // Run recalc in the background (serialized via internal mutex)
-        setImmediate(async () => {
-          try {
-            const updatedWindows = await recalcEffectiveScores(db, system_id, { skipNormalBehavior: true });
-            app.log.debug(`[${localTimestamp()}] Group unack background: ${updatedWindows} windows recalculated (system=${system_id})`);
-          } catch (err: any) {
-            app.log.error(`[${localTimestamp()}] Effective score recalc after group unack failed: ${err.message}`);
-          }
-        });
-
-        return reply;
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Group event un-acknowledge error: ${err.message}`);
         return reply.code(500).send({ error: 'Group event un-acknowledgement failed.' });
