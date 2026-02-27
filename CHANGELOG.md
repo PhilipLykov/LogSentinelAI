@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Single Finding Ack/Reopen Not Refreshing Scores**: `handleAcknowledge` and `handleReopen` in `DrillDown.tsx` did not call `onRefreshSystem`, so dashboard score bars stayed stale after acknowledging or reopening an individual finding
 - **Audit Log Page Zero Bug**: `fetchAuditLog` used falsy checks for `page` and `limit` params, silently dropping `page=0` or `limit=0` values. Now uses `!== undefined`
 - **Multiline Comment/Code Mismatch**: `isFragment` JSDoc said "comma or semicolon" but only checked for trailing commas; corrected the comment to match the implementation
+- **Finding Transition Writing Non-Existent Column**: `transitionFindingsOnAck` tried to set `updated_at` on the `findings` table, which has no such column, causing a PostgreSQL error. Replaced with the correct `acknowledged_at` and `acknowledged_by` columns
 
 ## [0.8.9-beta] - 2026-02-25
 

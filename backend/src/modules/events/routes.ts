@@ -44,7 +44,11 @@ async function transitionFindingsOnAck(
   // Batch update all matching findings in a single query
   await db('findings')
     .whereIn('id', idsToTransition)
-    .update({ status: 'acknowledged', updated_at: new Date().toISOString() });
+    .update({
+      status: 'acknowledged',
+      acknowledged_at: new Date().toISOString(),
+      acknowledged_by: 'system (event ack transition)',
+    });
 
   return idsToTransition.length;
 }
