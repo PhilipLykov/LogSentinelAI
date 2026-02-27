@@ -363,19 +363,47 @@ function extractTimestampSecond(e: RawEntry): string | null {
 /**
  * Returns true if a message looks like a continuation fragment rather
  * than the start of a new log entry.
+ *
+ * Detection patterns (checked after GENERIC_HEAD_RE excludes known heads):
+ *   1. Indented lines (leading whitespace)
+ *   2. Structure continuation chars: { } ) , ] :
+ *   3. JS/Java stack trace lines ("at ...")
+ *   4. Elided stack frames ("... N lines matching ...")
+ *   5. Short key: value lines (schema: undefined, params: 1)
+ *   6. Quoted data-structure elements ('foo' ], "key": value, etc.)
+ *   7. Lines ending with trailing comma or semicolon (short)
+ *   8. List/diff/separator prefixes (# - + ~ | *)
  */
 function isFragment(message: string): boolean {
   if (GENERIC_HEAD_RE.test(message)) return false;
-  // Lines starting with typical continuation patterns: whitespace, braces,
-  // comma-prefixed properties, closing brackets, "at " (stack trace), etc.
+
   if (/^\s+/.test(message)) return true;                       // indented
   if (/^[{}),\]:]/.test(message)) return true;                 // structure continuation
   if (/^at\s+/.test(message)) return true;                     // JS/Java stack trace
   if (/^\.\.\.\s*\d+\s+/.test(message)) return true;           // "... 4 lines matching ..."
   if (/^[a-zA-Z_]+:\s/.test(message) && message.length < 80) { // short key: value lines
-    // e.g. "schema: undefined," "table: undefined," "params: 1"
     return true;
   }
+
+  const trimmed = message.trimEnd();
+
+  // Quoted data-structure elements: lines starting with ' or " that end
+  // with a structure character (comma, bracket, brace, paren).
+  // Catches: 'paxcounter' ], "enabled": true, 'device', 'position',
+  if (/^['"]/.test(message) && /[,\]}\)]\s*$/.test(trimmed)) return true;
+
+  // Quoted key-value notation: "key": value  or  'key': value
+  // Catches: "password": "*28KwP...", 'enabled': true
+  if (/^['"][^'"]{1,60}['"]\s*:/.test(message)) return true;
+
+  // Short lines ending with trailing comma — data-structure elements
+  // where leading whitespace was stripped (e.g. by Fluent Bit Lua cleanup).
+  // Catches: true,  null,  42,  someValue,
+  if (trimmed.length < 60 && /,\s*$/.test(trimmed)) return true;
+
+  // List items, diff hunks, separators (never standalone log entries)
+  if (/^[-+~|*#]\s/.test(message) && message.length < 200) return true;
+
   return false;
 }
 

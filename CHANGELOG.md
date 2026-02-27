@@ -5,6 +5,21 @@ All notable changes to LogSentinel AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10-beta] - 2026-02-27
+
+### Added
+- **Application-Level Multiline Merging for Docker Logs**: New Fluent Bit `MULTILINE_PARSER` (`docker_app_multiline`) detects new log entries by their prefix pattern (bracketed tags, uppercase levels, timestamps, JSON objects) and treats everything else as continuation lines. A `multiline` filter in the pipeline merges continuations into the preceding record's message field before Lua enrichment runs. This prevents applications that format output across multiple lines (arrays, stack traces, objects) from producing fragmented events in the backend
+- **Universal Fragment Detection in Backend Multiline Module**: Expanded the `isFragment()` heuristic in `multiline.ts` Method 3 (generic fragment detection) with new patterns for quoted data-structure elements (`'paxcounter' ]`, `"enabled": true,`), quoted key-value pairs (`"key": value`), short lines ending with trailing commas, and list/diff/separator prefixes (`# - + ~ | *`). This catches continuation fragments even when Fluent Bit's Lua cleanup has stripped leading whitespace
+- **Discovery Suggestion Suppression**: The auto-discovery grouping engine now identifies and skips groups that are already covered by specific (non-catch-all) existing log sources. Stale pending/dismissed suggestions and buffer entries for covered sources are automatically cleaned up, preventing regeneration
+
+### Changed
+- **Discovery Panel Redesign**: Replaced the cramped table layout with a card-based design for discovered sources. Each card shows an editable name, event count badge, host/IP/program metadata tags, date range, sample messages, and action buttons in a visually organized layout
+- **Discovery Date Format**: Standardized date display to DD-MM-YYYY HH:MM:SS format using a dedicated `formatEuDate` helper, replacing inconsistent `toLocaleString()` calls
+
+### Fixed
+- **Ack All Events/Findings Not Refreshing Scores**: The "Ack All Events" button now refreshes criterion groups, meta-analysis summary, findings list, and parent system scores after completion. "Ack All Findings" now refreshes parent system scores. Both now behave consistently with per-group acknowledgment
+- **Discovery Engine Suggesting Already-Covered Sources**: The grouping engine was creating suggestions for hosts/IPs already matched by specific log sources, and old buffer entries kept regenerating stale suggestions after dismissal
+
 ## [0.8.9-beta] - 2026-02-25
 
 ### Performance
